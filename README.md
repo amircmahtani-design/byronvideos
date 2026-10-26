@@ -58,11 +58,20 @@ non-blocking advisory. There is no minimum word count. The narration is generate
 in one pass at the frozen voice speed; it is never regenerated or retimed merely
 to fit the usual range, and words are never trimmed, rewritten or padded.
 
-Separate technical limits protect this local prototype's resources: 4,000
-characters, 450 words, 300 seconds of complete narration, and 20 MB / 40 megapixels
+Separate technical limits protect this local prototype's resources: 16,000
+characters, 2,000 words, 900 seconds of complete narration, and 20 MB / 40 megapixels
 per painting. Exceeding a technical limit gives an explicit error, never a cut or
 substitute output. These capacity limits do not redefine the usual 90–180 seconds.
-Do not paste Markdown or pronunciation markup.
+The app narrates the full paste, including any title, byline or website you include;
+it never silently strips headers. For story-only narration, paste the story body.
+Standard HTTP(S) Markdown links are read and captioned as their visible label,
+not their hidden URL. The original paste is retained verbatim in the private
+output manifest alongside the narrated text. URLs are never fetched or executed.
+Other pronunciation or image markup is not supported.
+
+The expanded limits provide headroom, not a rendering-time promise. Processing is
+streamed frame by frame, but longer films require proportionally more CPU time and
+disk. A 15-minute narration can take substantially longer than 15 minutes to render.
 
 ## Style consistency — first film and two-hundredth
 

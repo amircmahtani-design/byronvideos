@@ -35,6 +35,7 @@ SCHEMA = {
         "font_height_fraction": float, "line_height_fraction": float, "two_line_top_fraction": float,
         "one_line_top_fraction": float, "safe_width_fraction": float, "max_lines": int,
         "max_characters": int, "max_duration_seconds": float, "tail_extension_seconds": float, "sentence_minimum_seconds": float,
+        "min_continuation_words": int,
         "stroke_height_divisor": int, "text_colour": str, "stroke_colour": str, "timing": str,
         "source_text_only": bool,
     },
@@ -129,7 +130,7 @@ def validate_style(style: dict, style_dir: Path = STYLE_DIR) -> dict:
     _require(canvas["aspect"] == "16:9" and canvas["colour_space"] == "bt709", "Unsupported aspect or colour space")
     duration = style["duration"]
     _require(duration["policy"] == "advisory" and not duration["resynthesize_to_fit"], "Duration guidance must not retime or regenerate narration")
-    _require(0 < duration["recommended_min_seconds"] < duration["recommended_max_seconds"] < duration["technical_max_seconds"] <= 600,
+    _require(0 < duration["recommended_min_seconds"] < duration["recommended_max_seconds"] < duration["technical_max_seconds"] <= 900,
              "Editorial duration guidance and technical processing limits must be separate")
     _require(art["fit"] == "contain" and art["resampling"] == "lanczos", "Paintings must use uncropped contain rendering")
     _require(not art["ai_modification"] and art["preserve_order"] and not motion["crop_artwork"], "Art integrity cannot be disabled")
@@ -147,6 +148,7 @@ def validate_style(style: dict, style_dir: Path = STYLE_DIR) -> dict:
     _require(.7 <= captions["safe_width_fraction"] <= .9 and .84 <= captions["two_line_top_fraction"] <= .9 and .88 <= captions["one_line_top_fraction"] <= .94, "Captions are outside the safe area")
     _require(captions["two_line_top_fraction"] + captions["line_height_fraction"] + captions["font_height_fraction"] / 2 <= .97, "Caption baseline exceeds lower safe area")
     _require(20 <= captions["max_characters"] <= 90 and 1 <= captions["max_duration_seconds"] <= 6 and 0 <= captions["tail_extension_seconds"] <= .5 and .5 <= captions["sentence_minimum_seconds"] <= 3 and captions["stroke_height_divisor"] > 0, "Invalid caption grouping")
+    _require(2 <= captions["min_continuation_words"] <= 5, "Invalid continuation-caption minimum")
     _require(captions["text_colour"] in style["palette"] and captions["stroke_colour"] in style["palette"], "Unknown caption colour")
     _require(voice["provider"] == "local_kokoro" and voice["voice"] in ("bm_george", "bm_fable") and voice["language"] == "b", "Unsupported narration provider or voice")
     _require(voice["model_repo"] == "hexgrad/Kokoro-82M" and voice["model_license"] == "Apache-2.0" and voice["device"] == "cpu", "Unapproved model source or device")

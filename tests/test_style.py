@@ -39,7 +39,7 @@ def test_compiled_snapshot_is_current():
     compile_style(check=True)
     style = load_style()
     assert style["approval"]["status"] == "DRAFT"
-    assert style["style_version"] == "draft-0.1.1"
+    assert style["style_version"] == "draft-0.1.2"
     assert style["narration"]["voice_approval"] == "PROVISIONAL"
     assert style_hash(style) == hashlib.sha256(canonical_bytes(style)).hexdigest()
 

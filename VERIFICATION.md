@@ -1,16 +1,38 @@
 # Verification record — local prototype
 
-This is engineering evidence, not aesthetic approval or a test of the user's
-actual essay and paintings. All image fixtures are original, labelled geometric
-test illustrations. No user assets have been supplied to this prototype.
+This is engineering evidence, not aesthetic or voice approval. Public regression
+fixtures are original, labelled geometric test illustrations. All private user
+inputs, output films and project-specific verification evidence remain excluded
+from the public repository.
 
-## Duration-policy correction — draft 0.1.1
+## Expanded input capacity — draft 0.1.2
+
+- 86 Python tests and 10 JavaScript tests pass, plus JavaScript syntax and the
+  source/compiled style check. Larger synthetic full-paste fixtures (title,
+  byline, website and story) and five original JPEGs pass through the API without
+  truncation, reordering or byte mutation. Exact input-limit boundaries are tested.
+- Technical limits are now 2,000 words, 16,000 characters and 900 seconds of
+  narration, with no minimum word count. The 90–180-second range remains only
+  guidance, and each film uses one synthesis pass at its frozen voice speed.
+  The 900-second processing boundary is tested in code, **not** a claim of a
+  completed 15-minute stress render or a rendering-time guarantee.
+- Standard HTTP(S) Markdown links use their visible text for speech/captions,
+  never hidden URLs. The exact raw paste and narrated text are both retained in
+  the private manifest. Story wording is not rewritten. URLs are never fetched.
+- Current draft style: `draft-0.1.2`, SHA256
+  `85dad97824c0efc4c1e550fc5415db87e97c65e2b1f162be463bdbd25b1fdd5a`.
+  It remains **DRAFT**, with no human style, voice or pronunciation approval.
+- Caption regression tests now keep adjacent quotation marks with their source
+  words and rebalance short overflow continuations without rewriting or changing
+  speech timestamps. Short complete dialogue remains intact.
+
+## Historical duration-policy correction — draft 0.1.1
 
 - 77 Python tests and 9 JavaScript tests pass, plus JavaScript syntax and the
   source/compiled style check. Boundary tests explicitly cover 89, 90, 180 and
   181 seconds: exactly one narration pass, unchanged input and fixed voice speed,
   non-blocking advisories outside the usual range, and completed MP4 downloads.
-- Current draft style: `draft-0.1.1`, SHA256
+- Historical draft style: `draft-0.1.1`, SHA256
   `3361cc2370a95856bb63057724e20a32be19fbdd3650aa3c9150f195f7d9499a`.
   This is still **DRAFT**, not human aesthetic or voice approval.
 - Real normal API path, without a short-script override: 61-word synthetic input
@@ -54,7 +76,8 @@ generation service or API key was used.
 - Human approval of the British voice, pronunciation and visual style.
 - Independent forced-alignment accuracy or subjective full-film listening review;
   captions currently use the speech model's own duration predictions.
-- The user's actual essay/painting sequence and rights/attribution review.
+- Rights/attribution review for publication of user-supplied material. Private
+  rendering does not establish publication rights.
 - Real-browser/iPad interaction QA: a browser suite is provided, but local Chromium
   launch was blocked by this execution environment. Unit tests are not browser QA.
 - Hosted conversion, authentication, private cloud storage, durable jobs, provider

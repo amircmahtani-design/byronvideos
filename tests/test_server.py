@@ -83,6 +83,30 @@ def test_health_and_complete_flow_preserve_order_and_text(tmp_path):
         assert not (tmp_path / "private.png").exists()
 
 
+def test_long_full_paste_and_five_original_jpegs_complete_without_mutation(tmp_path):
+    from byron_video.engine import validate_script
+    exact = 'Synthetic title\nBy Example Writer\nwww.example.com\n\n' + ('Every exact source word remains. ' * 180)
+    assert len(exact) > 4000 and len(exact.split()) > 450
+    originals = []
+    for colour in ['red', 'green', 'blue', 'yellow', 'purple']:
+        data = BytesIO()
+        Image.new('RGB', (80, 120), colour).save(data, format='JPEG')
+        originals.append(data.getvalue())
+    seen = []
+    def renderer(script, paths, output, progress=None, style_snapshot=None):
+        seen.append((script, [path.read_bytes() for path in paths]))
+        complete_renderer(script, paths, output, progress)
+    app = server.create_app(tmp_path / 'jobs', renderer=renderer, script_validator=validate_script,
+                            readiness=lambda: (True, 'Ready'), style_provider=fixture_style_provider)
+    with TestClient(app, base_url='http://127.0.0.1:8765', client=('127.0.0.1', 50000)) as client:
+        files = [('images', (f'{i}.jpg', data, 'image/jpeg')) for i, data in enumerate(originals)]
+        response = client.post('/api/jobs', data={'script': exact}, files=files)
+        assert response.status_code == 202
+        result = wait_for_status(client, response.json()['id'], 'complete')
+        assert client.get(result['download_url']).status_code == 200
+    assert seen == [(exact, originals)]
+
+
 @pytest.mark.parametrize('seconds,advisory', [(89,'Outside the usual range.'),(90,None),(180,None),(181,'Outside the usual range.')])
 def test_duration_advisory_does_not_block_completed_download(tmp_path, seconds, advisory):
     calls = []
@@ -119,7 +143,7 @@ def test_actual_image_type_and_mime(tmp_path, content, kind):
 
 def test_invalid_script(tmp_path):
     with make_client(tmp_path) as client:
-        for text in [" ", "x" * 4001]:
+        for text in [" ", "x" * 16001]:
             assert client.post("/api/jobs", data={"script": text}, files=uploads()).status_code == 422
 
 

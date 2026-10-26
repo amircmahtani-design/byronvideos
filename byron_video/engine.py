@@ -28,11 +28,13 @@ from .style import load_style, style_hash, resolve_font, validate_style
 
 MAX_IMAGE_BYTES = 20 * 1024 * 1024
 MAX_IMAGE_PIXELS = 40_000_000
-MAX_SCRIPT_CHARS = 4000
+MAX_SCRIPT_CHARS = 16_000
+MAX_SCRIPT_WORDS = 2_000
 SAMPLE_RATE = 24000
 BACKGROUND = (20, 20, 22)
 PARCHMENT = (239, 230, 210)
 VOICES = ("bm_george", "bm_fable")
+WEB_LINK = re.compile(r"(?<!!)\[([^\[\]\r\n]+)\]\((https?://[^\s()]+)\)")
 
 
 @dataclass
@@ -51,21 +53,31 @@ class Caption:
     end: float
 
 
+def narration_text(script: str) -> str:
+    """Use visible labels for ordinary web links; never fetch or execute URLs.
+
+    Only formatting is removed. The raw paste is retained separately in the
+    private output manifest, and ordinary story wording is returned unchanged.
+    """
+    return WEB_LINK.sub(lambda match: match.group(1), script)
+
+
 def validate_script(script: str, allow_short: bool = False) -> str:
     # allow_short is retained for older local callers; all nonempty lengths are
     # now accepted within the separately documented technical input limits.
     if not isinstance(script, str) or not script.strip():
         raise ValueError("Paste the essay you want narrated.")
     if len(script) > MAX_SCRIPT_CHARS:
-        raise ValueError("This prototype accepts up to 4,000 characters. It never silently shortens your essay.")
+        raise ValueError("This prototype accepts up to 16,000 characters. It never silently shortens your essay.")
     if any(ord(ch) < 32 and ch not in "\n\r\t" for ch in script):
         raise ValueError("The script contains unsupported control characters.")
-    if re.search(r"\[[^\]]+\]\([^)]*\)", script):
-        raise ValueError("Paste plain text, not Markdown links or pronunciation markup.")
+    visible = narration_text(script)
+    if re.search(r"\[[^\]]+\]\([^)]*\)", visible):
+        raise ValueError("Use plain text or standard HTTP(S) Markdown links; pronunciation and other markup are not supported.")
     words = re.findall(r"\S+", script)
-    if len(words) > 450:
-        raise ValueError("This local prototype has a technical limit of 450 words per film. Nothing was rewritten or removed.")
-    if any(len(word) > 80 for word in words):
+    if len(words) > MAX_SCRIPT_WORDS:
+        raise ValueError("This local prototype has a technical limit of 2,000 words per film. Nothing was rewritten or removed.")
+    if any(len(word) > 80 for word in re.findall(r"\S+", visible)):
         raise ValueError("The script contains an unusually long word or address. Please use readable plain text.")
     return script  # Preserve the original input, including punctuation and paragraphs.
 
@@ -208,19 +220,44 @@ def make_captions(script: str, words: list[Word], max_chars: int | None = None, 
     style = style or load_style()
     settings = style["captions"]
     max_chars = settings["max_characters"] if max_chars is None else max_chars
-    captions, group = [], []
+    # Keep adjacent source tokens together: punctuation, quotation marks and
+    # contractions must not become stray captions or move to the next sentence.
+    atoms = []
     for word in words:
+        if atoms and atoms[-1].char_end == word.char_start:
+            previous = atoms[-1]
+            atoms[-1] = Word(script[previous.char_start:word.char_end], previous.start,
+                             max(previous.end, word.end), previous.char_start, word.char_end)
+        else:
+            atoms.append(Word(**asdict(word)))
+    groups, group = [], []
+    for word in atoms:
         if group:
             candidate = script[group[0].char_start:word.char_end]
             if len(" ".join(candidate.split())) > max_chars or word.end - group[0].start > settings["max_duration_seconds"]:
-                captions.append(_caption(script, group))
+                groups.append(group)
                 group = []
         group.append(word)
         if re.search(r"[.!?;][\"'’”)]?$", word.text) and word.end - group[0].start >= settings["sentence_minimum_seconds"]:
-            captions.append(_caption(script, group))
+            groups.append(group)
             group = []
     if group:
-        captions.append(_caption(script, group))
+        groups.append(group)
+    # Rebalance only a continued sentence that overflowed a cue, not short
+    # complete dialogue such as “Yes.”. Word timestamps remain the source of truth.
+    minimum = settings["min_continuation_words"]
+    for index in range(1, len(groups)):
+        previous, current = groups[index - 1], groups[index]
+        if re.search(r"[.!?;][\"'’”)]?$", previous[-1].text):
+            continue
+        while len(current) < minimum and len(previous) > minimum:
+            candidate = [previous[-1], *current]
+            text = script[candidate[0].char_start:candidate[-1].char_end]
+            if (len(" ".join(text.split())) > max_chars
+                    or candidate[-1].end - candidate[0].start > settings["max_duration_seconds"]):
+                break
+            current.insert(0, previous.pop())
+    captions = [_caption(script, group) for group in groups]
     # Captions may outlast punctuation by a breath, but never overlap.
     for i, caption in enumerate(captions):
         if i + 1 < len(captions):
@@ -360,7 +397,8 @@ def render(script: str, image_paths: list[Path], output: Path, *, width=None, he
     preview_override = (width, height, fps) != (style["canvas"]["width"], style["canvas"]["height"], style["canvas"]["fps"])
     if preview_override and style["approval"]["status"] != "DRAFT":
         raise ValueError("Approved styles cannot be overridden. Create a reviewed new style version instead.")
-    validate_script(script, allow_short)
+    raw_script = validate_script(script, allow_short)
+    script = narration_text(raw_script)
     images = validate_images(image_paths, background=_colour(style, "charcoal"))
     if voice != style["narration"]["voice"]:
         raise ValueError("The voice must match the frozen style. Change the draft style source to audition another voice.")
@@ -452,7 +490,16 @@ def render(script: str, image_paths: list[Path], output: Path, *, width=None, he
         "synthesis_passes": 1, "duration_advisory": advisory,
         "draft_preview_override": preview_override, "loudness": loudness,
         "duration_seconds": round(duration, 3), "width": width, "height": height, "fps": fps,
-        "script_sha256": hashlib.sha256(script.encode()).hexdigest(),
+        "script_sha256": hashlib.sha256(raw_script.encode()).hexdigest(),
+        "narration_script_sha256": hashlib.sha256(script.encode()).hexdigest(),
+        "raw_script": raw_script, "narration_script": script,
+        "formatting_policy": "standard HTTP(S) Markdown links use visible labels only; no URL fetching",
+        "formatting_normalized": raw_script != script,
+        "source_wording_basis": "visible text after disclosed link-formatting removal",
+        "input_character_count": len(raw_script), "input_word_count": len(re.findall(r"\S+", raw_script)),
+        "source_image_count": len(image_paths),
+        "technical_limits": {"script_characters": MAX_SCRIPT_CHARS, "script_words": MAX_SCRIPT_WORDS,
+                             "narration_seconds": style["duration"]["technical_max_seconds"]},
         "source_image_sha256": [hashlib.sha256(Path(path).read_bytes()).hexdigest() for path in image_paths],
         "captions": [asdict(c) for c in captions], "words": [asdict(w) for w in words],
         "scene_boundaries": boundaries, "caption_timing": "Kokoro token-duration predictions, not independent forced alignment",

@@ -10,7 +10,7 @@ def test_script_exact():
     assert validate_script(text, True) == text
 
 
-@pytest.mark.parametrize('text', ['', 'word '*451, 'a'*4001, 'A\x00bad text', '[name](/pronunciation/)'])
+@pytest.mark.parametrize('text', ['', 'word '*2001, 'a'*16001, 'A\x00bad text', '[name](/pronunciation/)'])
 def test_reject_bad_scripts(text):
     with pytest.raises(ValueError):
         validate_script(text)
@@ -19,6 +19,37 @@ def test_reject_bad_scripts(text):
 def test_short_script_is_not_an_editorial_error():
     text = '  A short, exact essay.  '
     assert validate_script(text) == text
+
+
+def test_long_full_paste_capacity_preserves_headers_punctuation_and_body():
+    # Entirely synthetic: never put a user's essay in public regression fixtures.
+    text = 'Synthetic title\nBy Example Writer\nwww.example.com\n\n' + ('An exact sentence — with punctuation. ' * 150)
+    assert len(text) > 4000 and len(text.split()) > 450
+    assert validate_script(text) == text
+    assert validate_script('word ' * 2000) == 'word ' * 2000
+    # Exercise the character boundary without crossing the word boundary.
+    assert validate_script('abcdefg ' * 2000) == 'abcdefg ' * 2000
+
+
+def test_server_and_renderer_character_capacity_agree():
+    from byron_video import engine, server
+    assert engine.MAX_SCRIPT_CHARS == server.MAX_SCRIPT_CHARS == 16000
+    assert engine.MAX_SCRIPT_WORDS == 2000
+
+
+def test_standard_web_link_uses_visible_label_and_preserves_raw_source():
+    from byron_video.engine import narration_text
+    raw = 'Synthetic title\nBy Example Writer\n[example.com](https://example.com/private-path)\n\n“Every story word,” she said.'
+    assert validate_script(raw) == raw
+    assert narration_text(raw) == 'Synthetic title\nBy Example Writer\nexample.com\n\n“Every story word,” she said.'
+    assert 'https://example.com/private-path' in raw
+    assert narration_text('Exact body — unchanged.') == 'Exact body — unchanged.'
+
+
+@pytest.mark.parametrize('markup', ['[word](/pronunciation/)', '[label](javascript:alert)', '![picture](https://example.com/image.jpg)'])
+def test_non_web_or_image_markup_is_not_interpreted(markup):
+    with pytest.raises(ValueError, match='markup'):
+        validate_script(markup)
 
 
 @pytest.mark.parametrize('seconds,has_advisory', [(89,True),(90,False),(180,False),(181,True)])
@@ -50,9 +81,9 @@ def test_technical_duration_limit_is_separate_from_editorial_guidance():
     from byron_video.style import load_style
     style = load_style()
     assert duration_advisory(190,style)
-    assert duration_advisory(300,style)
+    assert duration_advisory(900,style)
     with pytest.raises(ValueError,match='technical processing limit'):
-        duration_advisory(301,style)
+        duration_advisory(901,style)
 
 
 def test_valid_images_and_source_untouched(tmp_path):
@@ -79,6 +110,29 @@ def test_alignment_preserves_punctuation():
     assert ''.join(c.text for c in captions) == script
     assert cursor == len(script)
     assert words[0].start == .5
+
+
+def test_closing_quotes_stay_with_their_sentence_and_input_tokens_unchanged():
+    from copy import deepcopy
+    script = '“An exact sentence.” Another sentence.'
+    pieces = ['“', 'An', 'exact', 'sentence', '.', '”', 'Another', 'sentence', '.']
+    tokens = [SimpleNamespace(text=t, start_ts=i*.4, end_ts=(i+1)*.4) for i,t in enumerate(pieces)]
+    words, _ = _align_tokens(script, tokens, 0, 0, 5)
+    original = deepcopy(words)
+    captions = make_captions(script, words)
+    assert captions[0].text == '“An exact sentence.”'
+    assert captions[1].text == 'Another sentence.'
+    assert words == original
+
+
+def test_continued_sentence_does_not_leave_a_single_word_caption():
+    import re
+    script = 'This exact sentence has several words and a final ending.'
+    words = [Word(m.group(), i*.35, (i+1)*.35, m.start(), m.end()) for i,m in enumerate(re.finditer(r'\S+',script))]
+    captions = make_captions(script,words,max_chars=48)
+    assert all(len(c.text.split()) >= 3 for c in captions)
+    assert ' '.join(c.text for c in captions) == script
+    assert all(len(c.text)<=48 and c.end-c.start<=5.32 for c in captions)
 
 
 def test_changed_or_unaligned_words_rejected():

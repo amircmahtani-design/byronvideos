@@ -30,7 +30,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from PIL import Image, UnidentifiedImageError
 
-MAX_SCRIPT_CHARS = 4_000
+MAX_SCRIPT_CHARS = 16_000
 MAX_IMAGE_BYTES = 20 * 1024 * 1024
 MAX_REQUEST_BYTES = 100 * 1024 * 1024 + 128 * 1024
 MAX_IMAGE_PIXELS = 40_000_000
@@ -340,7 +340,7 @@ def create_app(data_dir: Path | None = None, renderer: Callable | None = None,
             if not ready:
                 raise HTTPException(503, "The local renderer is not ready. Complete the setup in the README first.")
             if not script.strip() or len(script) > MAX_SCRIPT_CHARS:
-                raise HTTPException(422, "Paste a script of no more than 4,000 characters.")
+                raise HTTPException(422, "Paste a script of no more than 16,000 characters.")
             validator = script_validator
             if validator is None:
                 from .engine import validate_script

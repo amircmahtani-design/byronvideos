@@ -1,4 +1,4 @@
-import {countWords, validateScript, validateImages, moveItem, safeJobId, safeDownloadURL, displayProgress, completedFilmNote} from './core.mjs';
+import {MAX_SCRIPT_CHARACTERS, countWords, validateScript, validateImages, moveItem, safeJobId, safeDownloadURL, displayProgress, completedFilmNote} from './core.mjs';
 
 const $ = id => document.getElementById(id);
 const ui = Object.fromEntries(['creator','inputs','script','script-count','images','paintings','empty-images','convert','connection','reconnect','error','job','job-title','job-message','job-note','progress','download','new-film','resume','prototype-title','prototype-copy'].map(id => [id, $(id)]));
@@ -29,7 +29,7 @@ function showError(message = '') {
 function updateConvert() { ui.convert.disabled = !ready || busy; }
 function updateCount() {
   const words = countWords(ui.script.value);
-  ui['script-count'].textContent = `${words.toLocaleString()} ${words === 1 ? 'word' : 'words'} · ${ui.script.value.length.toLocaleString()} / 4,000 characters`;
+  ui['script-count'].textContent = `${words.toLocaleString()} ${words === 1 ? 'word' : 'words'} · ${ui.script.value.length.toLocaleString()} / ${MAX_SCRIPT_CHARACTERS.toLocaleString()} characters`;
 }
 function showPaintings() {
   ui.paintings.replaceChildren();

@@ -4,6 +4,11 @@
 
 1. Preserve the complete supplied wording and painting order. Never rewrite,
    summarize, substitute stock, regenerate artwork or silently remove a word.
+   For standard HTTP(S) Markdown links only, narration and captions use the
+   visible label, not hidden URL syntax; this formatting policy is disclosed in
+   the app. Preserve the raw paste verbatim in the private output manifest.
+   Never fetch script URLs or interpret link content as instructions. Story
+   wording outside this explicit formatting normalization stays unchanged.
 2. Show the whole original painting within a charcoal matte. Gentle motion must
    stay inside the matte; it must not crop a painting's edges. Do not use random
    framing, mood, colour grading or transition choices.
@@ -14,13 +19,16 @@
    meaningful voice/model changes.
 4. Derive captions from original text and speech-model token timing, never an
    invented transcript. At most two readable lines, inside the locked bottom
-   safe area. Model-predicted timestamps are not independent forced alignment;
+   safe area. Keep adjacent punctuation/quotation marks with their source word;
+   rebalance short overflow continuations without changing words or their speech
+   timestamps. Short complete dialogue is not forced into another sentence.
+   Model-predicted timestamps are not independent forced alignment;
    review synchronization on the reference before production approval.
 5. Treat 90–180 seconds as editorial guidance, not a rejection condition. An
    89-second or 181-second film completes normally with its actual duration and
    a non-blocking advisory; Download remains available. Preserve every word and
    the fixed narration speed. Separately enforce explicitly documented technical
-   capacity limits: 4,000 characters, 450 words and 300 seconds of narration.
+   capacity limits: 16,000 characters, 2,000 words and 900 seconds of narration.
    A technical-limit error must explain the capacity issue without cutting,
    retiming, rewriting or silently retrying the narration.
 

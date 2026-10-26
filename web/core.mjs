@@ -1,5 +1,5 @@
-export const MAX_SCRIPT_CHARACTERS = 4000;
-export const MAX_SCRIPT_WORDS = 450;
+export const MAX_SCRIPT_CHARACTERS = 16000;
+export const MAX_SCRIPT_WORDS = 2000;
 export const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 export const MAX_IMAGES = 5;
 export const MIN_IMAGES = 4;
@@ -11,7 +11,7 @@ export function countWords(text) {
 export function validateScript(text) {
   if (!text.trim()) return 'Paste the words you want the narrator to read.';
   if (text.length > MAX_SCRIPT_CHARACTERS) return `Your script has ${text.length.toLocaleString()} characters. Please shorten it to ${MAX_SCRIPT_CHARACTERS.toLocaleString()} or fewer; nothing has been removed.`;
-  if (countWords(text) > MAX_SCRIPT_WORDS) return 'This prototype has a technical limit of 450 words per film. Nothing has been removed.';
+  if (countWords(text) > MAX_SCRIPT_WORDS) return 'This prototype has a technical limit of 2,000 words per film. Nothing has been removed.';
   return null;
 }
 
