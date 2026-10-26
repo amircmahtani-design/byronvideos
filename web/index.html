@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="referrer" content="no-referrer">
+  <meta name="description" content="The Bad, Mad & Dangerous moving-essay studio: prepare your words and chosen paintings for narrated films. Studio preview; generation API not connected yet.">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' blob:; style-src 'self'; script-src 'self'; connect-src 'self'; media-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'">
+  <title>Byron Films · Bad, Mad &amp; Dangerous</title>
+  <link rel="stylesheet" href="styles.css">
+  <script type="module" src="app.mjs"></script>
+</head>
+<body>
+  <a class="skip" href="#creator">Skip to film creator</a>
+  <header class="masthead">
+    <p class="wordmark">Bad, Mad <span>&amp;</span> Dangerous</p>
+    <span class="edition">The moving essay</span>
+  </header>
+  <main>
+    <section class="intro" aria-labelledby="page-title">
+      <p class="eyebrow">Your words. Your paintings.</p>
+      <h1 id="page-title">Make an essay<br>into a film.</h1>
+      <p class="standfirst">Paste your script, add four or five paintings, and press Convert. The narration, gentle movement and captions are arranged for you.</p>
+      <div class="rule" aria-hidden="true"><span>✦</span></div>
+    </section>
+    <aside class="prototype" aria-label="Studio connection status">
+      <strong id="prototype-title">Studio preview — video generation API not connected yet.</strong>
+      <span id="prototype-copy">Your files stay in this browser; nothing is uploaded or published.</span>
+      <div class="connection-row"><span id="connection" role="status">Checking the renderer connection…</span><button id="reconnect" type="button" class="quiet small">Check again</button></div>
+    </aside>
+    <form id="creator" novalidate>
+      <fieldset id="inputs">
+        <legend class="sr-only">Create your film</legend>
+        <section class="card" aria-labelledby="script-title">
+          <div class="step-heading"><span class="step" aria-hidden="true">01</span><div><h2 id="script-title">Paste your script</h2><p>These are the exact words your narrator will read.</p></div></div>
+          <label class="sr-only" for="script">Your complete script</label>
+          <textarea id="script" name="script" rows="9" spellcheck="true" aria-describedby="script-help script-count" placeholder="Begin your essay here…"></textarea>
+          <div class="field-meta"><p id="script-help">Aim for about 210–420 words for 90 seconds–3 minutes. We never shorten your writing automatically.</p><output id="script-count" for="script">0 words · 0 / 4,000 characters</output></div>
+        </section>
+        <section class="card" aria-labelledby="painting-title">
+          <div class="step-heading"><span class="step" aria-hidden="true">02</span><div><h2 id="painting-title">Add your paintings</h2><p>Put them in the order you want them to appear.</p></div></div>
+          <div class="upload-row"><label class="file-button" for="images"><span aria-hidden="true">＋</span> Choose paintings<input id="images" name="images" type="file" accept="image/png,image/jpeg,.png,.jpg,.jpeg" multiple aria-describedby="image-help"></label><p id="image-help">Four or five PNG / JPEG files.<br>Up to 20 MB each. The complete painting stays in view.</p></div>
+          <ol id="paintings" class="paintings" aria-label="Paintings in film order"></ol>
+          <p id="empty-images" class="empty">Your paintings will appear here, in order.</p>
+          <p class="rights">Please use paintings and reproductions you have the right to publish.</p>
+        </section>
+        <section class="finish-card" aria-labelledby="convert-title">
+          <div><p class="eyebrow">Everything else is taken care of</p><h2 id="convert-title">Ready when you are.</h2><p>British male narration · bottom captions<br>gentle motion · smooth fades · widescreen MP4</p><p class="muted">The provisional synthetic voice is not an imitation of a named performer.</p></div>
+          <button id="convert" type="submit" class="primary" disabled>Convert to film <span aria-hidden="true">→</span></button>
+        </section>
+      </fieldset>
+      <p id="error" class="error" role="alert" hidden></p>
+    </form>
+    <section id="job" class="job card" aria-labelledby="job-title" hidden>
+      <p class="eyebrow">Your film</p><h2 id="job-title">Preparing your film</h2>
+      <p id="job-message" role="status" aria-live="polite"></p>
+      <progress id="progress" max="100" aria-label="Rendering progress"></progress>
+      <p id="job-note" class="muted">Keep this page open. Larger scripts take longer; the progress shown comes from the renderer.</p>
+      <div class="job-actions"><button id="resume" class="quiet" type="button" hidden>Check film status</button><a id="download" class="primary" download="byron-film.mp4" hidden>Download MP4 <span aria-hidden="true">↓</span></a><button id="new-film" type="button" class="quiet" hidden>Make another film</button></div>
+    </section>
+    <noscript><p class="error">This local creator needs JavaScript. Your files have not been uploaded.</p></noscript>
+  </main>
+  <footer><p><a href="https://www.badmaddangerous.com">Bad, Mad &amp; Dangerous — read the essays</a></p><span>Made from the art you choose. Nothing published without you.</span></footer>
+</body>
+</html>

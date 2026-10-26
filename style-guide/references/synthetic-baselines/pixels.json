@@ -1,0 +1,16 @@
+{
+  "status": "DRAFT_SYNTHETIC_ONLY",
+  "notice": "Deterministic regression baselines only. No user aesthetic approval or user artwork.",
+  "landscape": {
+    "rgb_sha256": "80a7edd961488dccfcad31f2ecd7a64d63dada8a8197a9fabd3ce1eca7f43c69",
+    "png_sha256": "c884a5c67b707770d71b1b77760379eeb5ca3f0688110b71c36253548c7506e3",
+    "width": 1920,
+    "height": 1080
+  },
+  "portrait": {
+    "rgb_sha256": "e81966c8611fba6fe6ae0880467892349d9c1b9a600a2c04ae7bb613e708b90f",
+    "png_sha256": "be8985a2b5bc7089e59eec9fff3c8beb2c8cf0fa4a6b6dcdcf4f5672aad7bc85",
+    "width": 1920,
+    "height": 1080
+  }
+}

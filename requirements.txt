@@ -1,0 +1,12 @@
+# CPU PyTorch should be installed first, per README. No paid API is used.
+kokoro==0.9.4
+misaki[en]==0.9.4
+transformers==4.57.6
+soundfile==0.14.0
+Pillow==13.0.0
+numpy==2.5.4
+fastapi==0.162.0
+uvicorn==0.54.0
+python-multipart==0.0.32
+espeakng-loader==0.2.4
+spacy==3.8.16

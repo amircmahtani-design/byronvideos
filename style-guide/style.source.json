@@ -1,0 +1,147 @@
+{
+  "schema_version": 1,
+  "style_version": "draft-0.1.0",
+  "approval": {
+    "status": "DRAFT",
+    "record": null,
+    "record_sha256": null
+  },
+  "canvas": {
+    "width": 1920,
+    "height": 1080,
+    "fps": 24,
+    "aspect": "16:9",
+    "colour_space": "bt709"
+  },
+  "palette": {
+    "charcoal": "#141416",
+    "crimson": "#5B0E14",
+    "gold": "#C8A96A",
+    "parchment": "#EFE6D2"
+  },
+  "artwork": {
+    "fit": "contain",
+    "viewport_width": 0.94,
+    "viewport_height": 0.77,
+    "viewport_top": 0.045,
+    "resampling": "lanczos",
+    "image_count_min": 4,
+    "image_count_max": 5,
+    "ai_modification": false,
+    "preserve_order": true
+  },
+  "motion": {
+    "zoom_min": 0.955,
+    "zoom_max": 0.985,
+    "pan_width_fraction": 0.008,
+    "easing": "smoothstep",
+    "alternate_direction": true,
+    "crop_artwork": false
+  },
+  "transitions": {
+    "crossfade_seconds": 0.7,
+    "opening_fade_seconds": 0.45,
+    "closing_fade_seconds": 0.55
+  },
+  "captions": {
+    "font_family": "DejaVu Sans",
+    "font_style": "Book",
+    "font_file": "fonts/DejaVuSans.ttf",
+    "font_sha256": "57f73e11f51999432bf7ab22ce55b6f945d5eca1bf824404cfa9ec2e3718c84e",
+    "font_license_file": "fonts/LICENSE-DejaVu.txt",
+    "font_height_fraction": 0.0355,
+    "line_height_fraction": 0.047,
+    "two_line_top_fraction": 0.88,
+    "one_line_top_fraction": 0.903,
+    "safe_width_fraction": 0.86,
+    "max_lines": 2,
+    "max_characters": 76,
+    "max_duration_seconds": 5.2,
+    "tail_extension_seconds": 0.12,
+    "stroke_height_divisor": 600,
+    "text_colour": "parchment",
+    "stroke_colour": "charcoal",
+    "timing": "kokoro_token_duration",
+    "source_text_only": true,
+    "sentence_minimum_seconds": 1.1
+  },
+  "narration": {
+    "provider": "local_kokoro",
+    "voice": "bm_george",
+    "voice_sha256": "f1bc812213dc59774769e5c80004b13eeb79bd78130b11b2d7f934542dab811b",
+    "language": "b",
+    "model_repo": "hexgrad/Kokoro-82M",
+    "model_revision": "f3ff3571791e39611d31c381e3a41a3af07b4987",
+    "model_file": "kokoro-v1_0.pth",
+    "model_sha256": "496dba118d1a58f5f3db2efc88dbdc216e0483fc89fe6e47ee1f2c53f18ad1e4",
+    "model_license": "Apache-2.0",
+    "speed": 0.93,
+    "minimum_speed": 0.78,
+    "maximum_speed": 1.08,
+    "leading_silence_seconds": 0.5,
+    "paragraph_pause_seconds": 0.3,
+    "trailing_silence_seconds": 0.45,
+    "random_seed": 0,
+    "device": "cpu",
+    "max_threads": 4,
+    "wording_policy": "preserve_exact_source",
+    "voice_approval": "PROVISIONAL",
+    "model_config_sha256": "5abb01e2403b072bf03d04fde160443e209d7a0dad49a423be15196b9b43c17f"
+  },
+  "audio": {
+    "sample_rate": 24000,
+    "pcm_subtype": "PCM_16",
+    "normalization": "ebu_r128_two_pass",
+    "peak_limit": 0.95,
+    "target_lufs": -16.0,
+    "true_peak_db": -1.5,
+    "loudness_status": "IMPLEMENTED_PENDING_LISTENING_APPROVAL",
+    "music": "none",
+    "lra_target": 11.0
+  },
+  "encoding": {
+    "video_codec": "libx264",
+    "video_preset": "fast",
+    "crf": 20,
+    "pixel_format": "yuv420p",
+    "encoder_threads": 4,
+    "audio_codec": "aac",
+    "audio_bitrate": "160k",
+    "faststart": true
+  },
+  "dependencies": {
+    "kokoro": "0.9.4",
+    "misaki": "0.9.4",
+    "torch": "2.6.0+cpu",
+    "transformers": "4.57.6",
+    "spacy": "3.8.16",
+    "spacy_model": "en_core_web_sm",
+    "spacy_model_version": "3.8.0",
+    "pillow": "13.0.0",
+    "numpy": "2.5.4",
+    "ffmpeg": "7.1.5-0+deb13u1",
+    "espeakng-loader": "0.2.4",
+    "soundfile": "0.14.0"
+  },
+  "references": {
+    "manifest": "references/manifest.json",
+    "approval_gate": "human_review_required",
+    "user_assets_public": false,
+    "manifest_sha256": "43d657df4d0cda55af286c2afd86d7c74518fc23054975a6421a2f98baab960a"
+  },
+  "scene_mapping": {
+    "policy": "paragraphs_when_counts_match_else_nearby_sentence_end",
+    "minimum_hold_seconds": 4.0,
+    "boundary_search_fraction": 0.35
+  },
+  "protocols": {
+    "README.md": "6df23ef06fb7abf766a290dd0315a68bc207e4e4190494ac3dc76dc96bd82627",
+    "PROTOCOL.md": "d03f17a5cf3105c02a9e719f874738716b5f7ca05430fbd4c9c9ad75d0fce0fa"
+  },
+  "implementation": {
+    "renderer_file": "byron_video/engine.py",
+    "renderer_sha256": "6828ebca0b4857c8caa2c4d041a5b71fe22f255552c364f3e58a0f4525de4d04",
+    "compiler_file": "byron_video/style.py",
+    "compiler_sha256": "3e67ce066b51dd60bfbd9b957612911b069e32fbd77679c2d80409a82d400283"
+  }
+}

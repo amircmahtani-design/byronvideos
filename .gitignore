@@ -1,0 +1,15 @@
+.venv/
+.cache/
+.private/
+__pycache__/
+.pytest_cache/
+*.pyc
+.env
+.env.*
+!.env.example
+*.mp4
+*.wav
+*.srt
+*.zip
+outputs/
+uploads/

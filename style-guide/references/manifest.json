@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "status": "DRAFT_SYNTHETIC_ONLY",
+  "assets": [
+    {
+      "id": "landscape-synthetic-baseline",
+      "kind": "frame",
+      "sha256": "c884a5c67b707770d71b1b77760379eeb5ca3f0688110b71c36253548c7506e3",
+      "storage": "public_synthetic",
+      "reference": "references/synthetic-baselines/landscape.png"
+    },
+    {
+      "id": "portrait-synthetic-baseline",
+      "kind": "frame",
+      "sha256": "be8985a2b5bc7089e59eec9fff3c8beb2c8cf0fa4a6b6dcdcf4f5672aad7bc85",
+      "storage": "public_synthetic",
+      "reference": "references/synthetic-baselines/portrait.png"
+    },
+    {
+      "id": "pixels-synthetic-baseline",
+      "kind": "metadata",
+      "sha256": "4707e91dd8e57c51d8bb37a79d4fd825cdd016f17676275df4ed54403c064320",
+      "storage": "public_synthetic",
+      "reference": "references/synthetic-baselines/pixels.json"
+    }
+  ],
+  "expected_synthetic_reference": {
+    "kind": "original geometric QA fixture, not a user's essay or paintings",
+    "required_outputs": [
+      "reference.mp4",
+      "reference.json",
+      "reference.srt",
+      "golden-frames.json"
+    ],
+    "publication": "Only explicitly labelled synthetic fixtures may be added to this public folder."
+  },
+  "private_reference_policy": "User-approved original scripts, paintings and finished films remain in private storage; this public manifest may contain only non-sensitive IDs and approved cryptographic hashes, never private URLs or image contents.",
+  "approval": null
+}

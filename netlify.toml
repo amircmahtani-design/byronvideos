@@ -1,0 +1,9 @@
+# Static, honest UI preview only. There is no hosted converter/API in this deploy.
+# Isolate the site build from the root's local-only Python/TTS dependencies.
+[build]
+  base = "web"
+  command = "node --test core.test.mjs && node --check app.mjs"
+  publish = "."
+
+[build.environment]
+  NODE_VERSION = "22"
