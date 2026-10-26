@@ -83,6 +83,24 @@ def test_health_and_complete_flow_preserve_order_and_text(tmp_path):
         assert not (tmp_path / "private.png").exists()
 
 
+@pytest.mark.parametrize('seconds,advisory', [(89,'Outside the usual range.'),(90,None),(180,None),(181,'Outside the usual range.')])
+def test_duration_advisory_does_not_block_completed_download(tmp_path, seconds, advisory):
+    calls = []
+    def render(script, paths, output, progress=None, style_snapshot=None):
+        calls.append(script)
+        complete_renderer(script, paths, output, progress)
+        return {'duration_seconds':seconds,'duration_advisory':advisory,'synthesis_passes':1}
+    with make_client(tmp_path,render) as client:
+        script='  Keep these exact words.  '
+        response=client.post('/api/jobs',data={'script':script},files=uploads())
+        assert response.status_code==202
+        result=wait_for_status(client,response.json()['id'],'complete')
+        assert result['duration_seconds']==seconds
+        assert result['duration_advisory']==advisory
+        assert client.get(result['download_url']).status_code==200
+        assert calls==[script]
+
+
 @pytest.mark.parametrize("count", [1, 3, 6])
 def test_image_count(tmp_path, count):
     with make_client(tmp_path) as client:
@@ -211,12 +229,12 @@ def test_animated_png_rejected(tmp_path):
 
 def test_readiness_and_script_validation_failure(tmp_path):
     def invalid(script):
-        raise ValueError("Please use a longer script.")
+        raise ValueError("This script exceeds the technical input limit.")
     app = server.create_app(tmp_path / "jobs", script_validator=invalid, readiness=lambda: (True, "ready"), style_provider=fixture_style_provider)
     with TestClient(app, base_url="http://127.0.0.1:8765", client=("127.0.0.1", 50000)) as client:
         result = client.post("/api/jobs", data={"script": "Words"}, files=uploads())
         assert result.status_code == 422
-        assert result.json()["detail"] == "Please use a longer script."
+        assert result.json()["detail"] == "This script exceeds the technical input limit."
     app = server.create_app(tmp_path / "jobs", readiness=lambda: (False, "missing"), style_provider=fixture_style_provider)
     with TestClient(app, base_url="http://127.0.0.1:8765", client=("127.0.0.1", 50000)) as client:
         assert client.get("/api/health").json()["ready"] is False
@@ -258,8 +276,8 @@ def test_invalid_style_fails_closed(tmp_path):
 
 def test_friendly_renderer_validation_error_reaches_operator(tmp_path):
     def fail(*args, **kwargs):
-        raise ValueError("The narration is longer than three minutes. Please supply a shorter script.")
+        raise ValueError("The narration exceeds the technical processing limit. Nothing was retimed.")
     with make_client(tmp_path, fail) as client:
         response = client.post("/api/jobs", data={"script": "Words"}, files=uploads())
         result = wait_for_status(client, response.json()["id"], "failed")
-        assert "shorter script" in result["message"]
+        assert "technical processing limit" in result["message"]

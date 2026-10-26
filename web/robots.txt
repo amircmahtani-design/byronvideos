@@ -1,0 +1,9 @@
+User-agent: *
+Allow: /
+Disallow: /api/
+Disallow: /jobs/
+Disallow: /creator/
+Disallow: /uploads/
+Disallow: /.private/
+
+Sitemap: https://byronvideos.netlify.app/sitemap.xml

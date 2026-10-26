@@ -39,9 +39,20 @@ def test_compiled_snapshot_is_current():
     compile_style(check=True)
     style = load_style()
     assert style["approval"]["status"] == "DRAFT"
-    assert style["style_version"] == "draft-0.1.0"
+    assert style["style_version"] == "draft-0.1.1"
     assert style["narration"]["voice_approval"] == "PROVISIONAL"
     assert style_hash(style) == hashlib.sha256(canonical_bytes(style)).hexdigest()
+
+
+@pytest.mark.parametrize('change', ['resynthesis','editorial_technical_overlap'])
+def test_duration_policy_cannot_force_regeneration_or_hide_a_hard_editorial_cap(root, change):
+    source=read(root)
+    if change=='resynthesis':
+        source['duration']['resynthesize_to_fit']=True
+    else:
+        source['duration']['technical_max_seconds']=source['duration']['recommended_max_seconds']
+    with pytest.raises(ValueError):
+        validate_style(source,root)
 
 
 def test_compile_is_deterministic_and_compact(root):

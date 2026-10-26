@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "style_version": "draft-0.1.0",
+  "style_version": "draft-0.1.1",
   "approval": {
     "status": "DRAFT",
     "record": null,
@@ -76,8 +76,6 @@
     "model_sha256": "496dba118d1a58f5f3db2efc88dbdc216e0483fc89fe6e47ee1f2c53f18ad1e4",
     "model_license": "Apache-2.0",
     "speed": 0.93,
-    "minimum_speed": 0.78,
-    "maximum_speed": 1.08,
     "leading_silence_seconds": 0.5,
     "paragraph_pause_seconds": 0.3,
     "trailing_silence_seconds": 0.45,
@@ -135,13 +133,20 @@
     "boundary_search_fraction": 0.35
   },
   "protocols": {
-    "README.md": "6df23ef06fb7abf766a290dd0315a68bc207e4e4190494ac3dc76dc96bd82627",
-    "PROTOCOL.md": "d03f17a5cf3105c02a9e719f874738716b5f7ca05430fbd4c9c9ad75d0fce0fa"
+    "README.md": "801b619d01eae5c5d1e71ba39b3f5466afddb56dc6c9761459db6144b48984d0",
+    "PROTOCOL.md": "2b511045c0e490751ff572348b30a4301daa86dd0fec08a64df3fb5e723fb09b"
   },
   "implementation": {
     "renderer_file": "byron_video/engine.py",
-    "renderer_sha256": "6828ebca0b4857c8caa2c4d041a5b71fe22f255552c364f3e58a0f4525de4d04",
+    "renderer_sha256": "b721061b4977d97dcfe1640b2a07a4591905b5484453e5a2d78bb3cbdee50240",
     "compiler_file": "byron_video/style.py",
-    "compiler_sha256": "3e67ce066b51dd60bfbd9b957612911b069e32fbd77679c2d80409a82d400283"
+    "compiler_sha256": "44a6a1a9297cf8a8fc22b5f00e79884d0d17667479e0c1941bb78501d4803623"
+  },
+  "duration": {
+    "policy": "advisory",
+    "recommended_min_seconds": 90.0,
+    "recommended_max_seconds": 180.0,
+    "technical_max_seconds": 300.0,
+    "resynthesize_to_fit": false
   }
 }

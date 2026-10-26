@@ -51,11 +51,17 @@ CLI alternative:
   --output /private/path/essay.mp4
 ```
 
-Default output is 1920×1080, 24 fps, H.264/AAC, fast-start MP4. The full narration
-must fit 90–180 seconds. Use about 180–400 words; the actual duration is measured.
-A bounded voice-speed adjustment can bring a borderline script into range, but
-the system never trims, rewrites or pads words. If it cannot fit, it explains why.
-Maximum input: 4,000 characters, 450 words, 20 MB and 40 megapixels per painting.
+Default output is 1920×1080, 24 fps, H.264/AAC, fast-start MP4. Films are generally
+90–180 seconds, but that is **guidance, not a required duration**. Shorter or longer
+films still complete and remain downloadable, with their actual duration and a
+non-blocking advisory. There is no minimum word count. The narration is generated
+in one pass at the frozen voice speed; it is never regenerated or retimed merely
+to fit the usual range, and words are never trimmed, rewritten or padded.
+
+Separate technical limits protect this local prototype's resources: 4,000
+characters, 450 words, 300 seconds of complete narration, and 20 MB / 40 megapixels
+per painting. Exceeding a technical limit gives an explicit error, never a cut or
+substitute output. These capacity limits do not redefine the usual 90–180 seconds.
 Do not paste Markdown or pronunciation markup.
 
 ## Style consistency — first film and two-hundredth
@@ -96,7 +102,7 @@ node --test web/core.test.mjs
 .venv/bin/python scripts/make_demo.py .private/demo
 .venv/bin/python -m byron_video.engine --script .private/demo/script.txt \
   --images .private/demo/painting-1.png .private/demo/painting-2.png .private/demo/painting-3.png .private/demo/painting-4.png \
-  --output .private/demo/synthetic-prototype.mp4 --demo-short
+  --output .private/demo/synthetic-prototype.mp4
 ```
 
 The short fixture is clearly labelled in both script and pictures. It proves the

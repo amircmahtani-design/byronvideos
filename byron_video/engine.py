@@ -52,6 +52,8 @@ class Caption:
 
 
 def validate_script(script: str, allow_short: bool = False) -> str:
+    # allow_short is retained for older local callers; all nonempty lengths are
+    # now accepted within the separately documented technical input limits.
     if not isinstance(script, str) or not script.strip():
         raise ValueError("Paste the essay you want narrated.")
     if len(script) > MAX_SCRIPT_CHARS:
@@ -62,9 +64,7 @@ def validate_script(script: str, allow_short: bool = False) -> str:
         raise ValueError("Paste plain text, not Markdown links or pronunciation markup.")
     words = re.findall(r"\S+", script)
     if len(words) > 450:
-        raise ValueError("This essay is too long for a three-minute film. Please provide a shorter version; your words will not be rewritten.")
-    if not allow_short and len(words) < 180:
-        raise ValueError("Please use at least 180 words for a 90-second to three-minute film.")
+        raise ValueError("This local prototype has a technical limit of 450 words per film. Nothing was rewritten or removed.")
     if any(len(word) > 80 for word in words):
         raise ValueError("The script contains an unusually long word or address. Please use readable plain text.")
     return script  # Preserve the original input, including punctuation and paragraphs.
@@ -327,6 +327,28 @@ def normalize_audio(source: Path, destination: Path, style: dict) -> dict:
     return {"method": "ebu_r128_two_pass", "target_lufs": cfg["target_lufs"], "true_peak_db": cfg["true_peak_db"], "source_measurement": measured}
 
 
+def duration_advisory(duration: float, style: dict) -> str | None:
+    """Editorial guidance never prevents a valid film from being downloaded."""
+    policy = style["duration"]
+    if not math.isfinite(duration) or duration <= 0:
+        raise ValueError("The narration has no valid duration.")
+    if duration > policy["technical_max_seconds"]:
+        raise ValueError(f"The complete narration exceeds this prototype's {policy['technical_max_seconds']:g}-second technical processing limit. Nothing was cut or retimed.")
+    if not policy["recommended_min_seconds"] <= duration <= policy["recommended_max_seconds"]:
+        return (f"Outside the usual {policy['recommended_min_seconds']:g}–{policy['recommended_max_seconds']:g}-second range. "
+                "Your complete script and narration speed were preserved.")
+    return None
+
+
+def prepare_narration(script: str, style: dict, progress=None):
+    """One synthesis pass at the frozen voice speed; never regenerate to fit."""
+    audio, words, paragraphs = synthesize(script, style["narration"]["voice"],
+                                          speed=style["narration"]["speed"],
+                                          progress=progress, style=style)
+    duration = len(audio) / SAMPLE_RATE
+    return audio, words, paragraphs, duration, duration_advisory(duration, style)
+
+
 def render(script: str, image_paths: list[Path], output: Path, *, width=None, height=None, fps=None, voice=None, allow_short=False, progress: Callable[[int, str], None] | None = None, style_snapshot=None) -> dict:
     started = time.monotonic()
     style = json.loads(json.dumps(style_snapshot if style_snapshot is not None else load_style()))
@@ -360,20 +382,7 @@ def render(script: str, image_paths: list[Path], output: Path, *, width=None, he
     progress(5, "Preparing the British narration")
     narration_started = time.monotonic()
     effective_speed = style["narration"]["speed"]
-    audio, words, paragraphs = synthesize(script, voice, speed=effective_speed, progress=progress, style=style)
-    duration = len(audio) / SAMPLE_RATE
-    if not allow_short and not 90 <= duration <= 180:
-        # One bounded tempo correction, through TTS rather than time-stretching or cutting.
-        desired = 91 if duration < 90 else 179
-        speed = style["narration"]["speed"] * duration / desired
-        if style["narration"]["minimum_speed"] <= speed <= style["narration"]["maximum_speed"]:
-            effective_speed = speed
-            audio, words, paragraphs = synthesize(script, voice, speed=speed, progress=progress, style=style)
-            duration = len(audio) / SAMPLE_RATE
-        if not 90 <= duration <= 180:
-            raise ValueError(f"The complete narration is {duration:.0f} seconds. Please adjust the essay to fit 90–180 seconds; nothing was cut.")
-    if duration > 190:
-        raise ValueError("The complete narration is too long. No words were trimmed.")
+    audio, words, paragraphs, duration, advisory = prepare_narration(script, style, progress)
     narration_elapsed = time.monotonic() - narration_started
     captions = make_captions(script, words, style=style)
     # Validate exact caption content, allowing only whitespace/layout changes.
@@ -440,6 +449,7 @@ def render(script: str, image_paths: list[Path], output: Path, *, width=None, he
         "prototype": True, "voice": voice, "voice_approval": "provisional; requires human listening review",
         "style_version": style["style_version"], "style_sha256": style_hash(style), "style_snapshot": style,
         "effective_narration_speed": effective_speed,
+        "synthesis_passes": 1, "duration_advisory": advisory,
         "draft_preview_override": preview_override, "loudness": loudness,
         "duration_seconds": round(duration, 3), "width": width, "height": height, "fps": fps,
         "script_sha256": hashlib.sha256(script.encode()).hexdigest(),
@@ -463,7 +473,7 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--voice", choices=VOICES, default="bm_george")
     parser.add_argument("--resolution", choices=("1080p", "720p", "540p"), default="1080p")
-    parser.add_argument("--demo-short", action="store_true", help="Allow short synthetic QA fixtures, not the production duration requirement")
+    parser.add_argument("--demo-short", action="store_true", help="Compatibility flag: short scripts are now accepted without an override")
     args = parser.parse_args()
     sizes = {"1080p": (1920, 1080), "720p": (1280, 720), "540p": (960, 540)}
     try:

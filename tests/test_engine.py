@@ -10,10 +10,49 @@ def test_script_exact():
     assert validate_script(text, True) == text
 
 
-@pytest.mark.parametrize('text', ['', 'short', 'word '*451, 'a'*4001, 'A\x00bad text', '[name](/pronunciation/)'])
+@pytest.mark.parametrize('text', ['', 'word '*451, 'a'*4001, 'A\x00bad text', '[name](/pronunciation/)'])
 def test_reject_bad_scripts(text):
     with pytest.raises(ValueError):
         validate_script(text)
+
+
+def test_short_script_is_not_an_editorial_error():
+    text = '  A short, exact essay.  '
+    assert validate_script(text) == text
+
+
+@pytest.mark.parametrize('seconds,has_advisory', [(89,True),(90,False),(180,False),(181,True)])
+def test_duration_guidance_synthesizes_once_at_frozen_speed(monkeypatch, seconds, has_advisory):
+    import copy
+    import numpy as np
+    from byron_video import engine
+    from byron_video.style import load_style
+    style = load_style()
+    original_style = copy.deepcopy(style)
+    exact_script = '  “Keep every word,” he said.\n\nNo automatic retiming.  '
+    calls = []
+    audio = np.ones(seconds * engine.SAMPLE_RATE, dtype=np.float32) * .1
+    tokens, paragraphs = [object()], [.5]
+    def fake_synthesis(script, voice, *, speed, progress, style):
+        calls.append((script,voice,speed))
+        return audio, tokens, paragraphs
+    monkeypatch.setattr(engine, 'synthesize', fake_synthesis)
+    returned = engine.prepare_narration(exact_script, style)
+    assert len(calls) == 1
+    assert calls[0] == (exact_script, style['narration']['voice'], style['narration']['speed'])
+    assert style == original_style
+    assert returned[0] is audio and returned[1] is tokens and returned[2] is paragraphs
+    assert returned[3] == seconds and bool(returned[4]) is has_advisory
+
+
+def test_technical_duration_limit_is_separate_from_editorial_guidance():
+    from byron_video.engine import duration_advisory
+    from byron_video.style import load_style
+    style = load_style()
+    assert duration_advisory(190,style)
+    assert duration_advisory(300,style)
+    with pytest.raises(ValueError,match='technical processing limit'):
+        duration_advisory(301,style)
 
 
 def test_valid_images_and_source_untouched(tmp_path):

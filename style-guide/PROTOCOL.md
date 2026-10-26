@@ -7,17 +7,22 @@
 2. Show the whole original painting within a charcoal matte. Gentle motion must
    stay inside the matte; it must not crop a painting's edges. Do not use random
    framing, mood, colour grading or transition choices.
-3. Use the locked British synthetic voice, with consistent pauses and a bounded
-   tempo policy. A pronunciation failure blocks export rather than dropping a
+3. Use the locked British synthetic voice, with consistent pauses and one fixed
+   tempo. Generate the narration in one pass; never regenerate it or vary speed
+   merely to reach a target duration. A pronunciation failure blocks export rather than dropping a
    word. Human listening review is required for the first reference, names and
    meaningful voice/model changes.
 4. Derive captions from original text and speech-model token timing, never an
    invented transcript. At most two readable lines, inside the locked bottom
    safe area. Model-predicted timestamps are not independent forced alignment;
    review synchronization on the reference before production approval.
-5. Honour actual duration limits without cutting content. If a bounded tempo
-   correction cannot fit the complete narration, explain the problem and ask
-   for a suitable script rather than pretending conversion succeeded.
+5. Treat 90–180 seconds as editorial guidance, not a rejection condition. An
+   89-second or 181-second film completes normally with its actual duration and
+   a non-blocking advisory; Download remains available. Preserve every word and
+   the fixed narration speed. Separately enforce explicitly documented technical
+   capacity limits: 4,000 characters, 450 words and 300 seconds of narration.
+   A technical-limit error must explain the capacity issue without cutting,
+   retiming, rewriting or silently retrying the narration.
 
 ## Establishing the first reference
 

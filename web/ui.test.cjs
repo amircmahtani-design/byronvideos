@@ -40,7 +40,7 @@ const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR
     let posted=0,body='';
     let status='running';
     await page.route('**/api/jobs', async route => {posted++;body=route.request().postData();await route.fulfill({json:{id:'testjob123'}});});
-    await page.route('**/api/jobs/testjob123', route => route.fulfill({json:status==='running'?{status:'running',progress:23,message:'Test double rendering'}:{status:'complete',progress:100,message:'Test double finished',download_url:'/api/jobs/testjob123/video'}}));
+    await page.route('**/api/jobs/testjob123', route => route.fulfill({json:status==='running'?{status:'running',progress:23,message:'Test double rendering'}:{status:'complete',progress:100,message:'Test double finished',duration_seconds:89,duration_advisory:'Your complete script and narration speed were preserved.',download_url:'/api/jobs/testjob123/video'}}));
     await page.locator('#convert').click();
     await page.waitForFunction(()=>document.querySelector('#progress').value===23);
     await page.locator('#creator').dispatchEvent('submit');
@@ -55,6 +55,8 @@ const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR
     status='complete';
     await page.locator('#download').waitFor({state:'visible',timeout:6000});
     assert.equal(await page.locator('#download').getAttribute('href'),url+'/api/jobs/testjob123/video');
+    assert.ok((await page.locator('#job-note').textContent()).includes('Duration 1:29.'));
+    assert.ok((await page.locator('#job-note').textContent()).includes('narration speed were preserved'));
     await page.locator('#new-film').click();
     await page.waitForFunction(()=>!document.querySelector('#convert').disabled);
     console.log('PASS: verified completion response exposes local download; make-another unlocks.');

@@ -23,6 +23,8 @@ SCHEMA = {
     "implementation": {"renderer_file": str, "renderer_sha256": str, "compiler_file": str, "compiler_sha256": str},
     "approval": {"status": str, "record": (str, type(None)), "record_sha256": (str, type(None))},
     "canvas": {"width": int, "height": int, "fps": int, "aspect": str, "colour_space": str},
+    "duration": {"policy": str, "recommended_min_seconds": float, "recommended_max_seconds": float,
+                 "technical_max_seconds": float, "resynthesize_to_fit": bool},
     "palette": {key: str for key in ("charcoal", "crimson", "gold", "parchment")},
     "artwork": {"fit": str, "viewport_width": float, "viewport_height": float, "viewport_top": float, "resampling": str, "image_count_min": int, "image_count_max": int, "ai_modification": bool, "preserve_order": bool},
     "motion": {"zoom_min": float, "zoom_max": float, "pan_width_fraction": float, "easing": str, "alternate_direction": bool, "crop_artwork": bool},
@@ -39,7 +41,7 @@ SCHEMA = {
     "narration": {
         "provider": str, "voice": str, "voice_sha256": str, "language": str,
         "model_repo": str, "model_revision": str, "model_file": str, "model_sha256": str, "model_config_sha256": str,
-        "model_license": str, "speed": float, "minimum_speed": float, "maximum_speed": float,
+        "model_license": str, "speed": float,
         "leading_silence_seconds": float, "paragraph_pause_seconds": float,
         "trailing_silence_seconds": float, "random_seed": int, "device": str,
         "max_threads": int, "wording_policy": str, "voice_approval": str,
@@ -125,6 +127,10 @@ def validate_style(style: dict, style_dir: Path = STYLE_DIR) -> dict:
     canvas, art, motion, captions, voice, audio = (style[key] for key in ("canvas", "artwork", "motion", "captions", "narration", "audio"))
     _require((canvas["width"], canvas["height"]) in ((1920, 1080), (1280, 720), (960, 540)) and canvas["fps"] in (24, 25, 30), "Unsupported canvas")
     _require(canvas["aspect"] == "16:9" and canvas["colour_space"] == "bt709", "Unsupported aspect or colour space")
+    duration = style["duration"]
+    _require(duration["policy"] == "advisory" and not duration["resynthesize_to_fit"], "Duration guidance must not retime or regenerate narration")
+    _require(0 < duration["recommended_min_seconds"] < duration["recommended_max_seconds"] < duration["technical_max_seconds"] <= 600,
+             "Editorial duration guidance and technical processing limits must be separate")
     _require(art["fit"] == "contain" and art["resampling"] == "lanczos", "Paintings must use uncropped contain rendering")
     _require(not art["ai_modification"] and art["preserve_order"] and not motion["crop_artwork"], "Art integrity cannot be disabled")
     _require(art["image_count_min"] == 4 and art["image_count_max"] == 5, "Exactly four or five paintings are supported")
@@ -146,7 +152,7 @@ def validate_style(style: dict, style_dir: Path = STYLE_DIR) -> dict:
     _require(voice["model_repo"] == "hexgrad/Kokoro-82M" and voice["model_license"] == "Apache-2.0" and voice["device"] == "cpu", "Unapproved model source or device")
     _require(bool(re.fullmatch(r"[0-9a-f]{40}", voice["model_revision"])), "Model must be pinned to a revision")
     _require(Path(voice["model_file"]).name == voice["model_file"] and voice["model_file"].endswith(".pth"), "Unsafe model filename")
-    _require(.5 <= voice["minimum_speed"] <= voice["speed"] <= voice["maximum_speed"] <= 1.5, "Invalid narration speeds")
+    _require(.5 <= voice["speed"] <= 1.5, "Invalid fixed narration speed")
     _require(all(0 <= voice[key] <= 2 for key in ("leading_silence_seconds", "paragraph_pause_seconds", "trailing_silence_seconds")) and 1 <= voice["max_threads"] <= 16, "Invalid narration timing or threads")
     _require(voice["wording_policy"] == "preserve_exact_source" and voice["voice_approval"] in ("PROVISIONAL", "APPROVED"), "Unsupported narration policy")
     _require(audio["sample_rate"] == 24000 and audio["pcm_subtype"] == "PCM_16" and 0 < audio["peak_limit"] < 1 and audio["music"] == "none", "Unsupported audio format")

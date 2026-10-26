@@ -13,6 +13,7 @@ import copy
 import json
 import ipaddress
 import logging
+import math
 import os
 from pathlib import Path
 import re
@@ -152,11 +153,15 @@ class Job:
     message: str = "Waiting to begin."
     style_snapshot: dict = field(default_factory=dict)
     style_metadata: dict = field(default_factory=dict)
+    duration_seconds: float | None = None
+    duration_advisory: str | None = None
 
     def public(self) -> dict:
         result = {"id": self.id, "status": self.status, "progress": self.progress, "message": self.message, "style": copy.deepcopy(self.style_metadata)}
         if self.status == "complete":
             result["download_url"] = f"/api/jobs/{self.id}/video"
+            result["duration_seconds"] = self.duration_seconds
+            result["duration_advisory"] = self.duration_advisory
         return result
 
 
@@ -232,11 +237,18 @@ class JobManager:
             if renderer is None:
                 from .engine import render
                 renderer = render
-            renderer(script, paths, job.directory / "film.mp4", progress=progress,
-                     style_snapshot=copy.deepcopy(job.style_snapshot))
+            result = renderer(script, paths, job.directory / "film.mp4", progress=progress,
+                              style_snapshot=copy.deepcopy(job.style_snapshot))
             if not (job.directory / "film.mp4").is_file() or (job.directory / "film.mp4").stat().st_size == 0:
                 raise RuntimeError("Renderer did not produce a film")
             with self.lock:
+                if isinstance(result, dict):
+                    duration = result.get("duration_seconds")
+                    if type(duration) in (int, float) and math.isfinite(duration) and duration > 0:
+                        job.duration_seconds = duration
+                    advisory = result.get("duration_advisory")
+                    if isinstance(advisory, str):
+                        job.duration_advisory = advisory[:500]
                 job.status, job.progress, job.message = "complete", 100, "Your film is ready to download."
         except Exception as exc:
             # Log exception class only: error strings may contain private text/paths.

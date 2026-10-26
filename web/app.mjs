@@ -1,4 +1,4 @@
-import {countWords, validateScript, validateImages, moveItem, safeJobId, safeDownloadURL, displayProgress} from './core.mjs';
+import {countWords, validateScript, validateImages, moveItem, safeJobId, safeDownloadURL, displayProgress, completedFilmNote} from './core.mjs';
 
 const $ = id => document.getElementById(id);
 const ui = Object.fromEntries(['creator','inputs','script','script-count','images','paintings','empty-images','convert','connection','reconnect','error','job','job-title','job-message','job-note','progress','download','new-film','resume','prototype-title','prototype-copy'].map(id => [id, $(id)]));
@@ -111,7 +111,7 @@ async function pollJob() {
       const download = safeDownloadURL(job.download_url, location.origin, id);
       if (!download) throw new Error('The renderer finished but did not provide a valid local download. Check film status again.');
       stopPolling(); ui['job-title'].textContent = 'Your film is ready'; ui.progress.value = 100; ui.download.href = download; ui.download.hidden = false; ui['new-film'].hidden = false;
-      ui['job-note'].textContent = 'Download your MP4 and watch it before publishing. This prototype does not publish your film.';
+      ui['job-note'].textContent = completedFilmNote(job);
       // Keep the form locked until the operator chooses to make another film.
       saveActiveJob(null); activeJob = null;
     } else if (['failed','error','cancelled'].includes(job.status)) failedJob(typeof job.message === 'string' ? job.message : 'The renderer reported an error.');

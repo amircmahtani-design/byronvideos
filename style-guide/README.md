@@ -43,8 +43,9 @@ current. It does not send the protocol, script, paintings or style to a model.
   grouping and timestamp policy. The bundled unmodified DejaVu Sans carries its
   licence in `fonts/`; it is a **provisional screen-readable subtitle choice**,
   not an assertion that it is the existing website's editorial face.
-- Exact Kokoro model/revision/config/voice fingerprints, language, seed, tempo
-  range, pauses, runtime dependencies and no-rewrite rule.
+- Exact Kokoro model/revision/config/voice fingerprints, language, seed, fixed tempo,
+  pauses, runtime dependencies and no-rewrite rule. The usual duration is advisory;
+  a separately labelled technical processing ceiling protects local resources.
 - Motion amplitude, easing, direction rule and transition/fade durations.
 - Two-pass EBU R128 audio target of -16 LUFS and -1.5 dB true peak, with an
   11 LU loudness-range target. These are locked renderer settings, not a claim

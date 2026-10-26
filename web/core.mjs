@@ -1,4 +1,5 @@
 export const MAX_SCRIPT_CHARACTERS = 4000;
+export const MAX_SCRIPT_WORDS = 450;
 export const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 export const MAX_IMAGES = 5;
 export const MIN_IMAGES = 4;
@@ -10,6 +11,7 @@ export function countWords(text) {
 export function validateScript(text) {
   if (!text.trim()) return 'Paste the words you want the narrator to read.';
   if (text.length > MAX_SCRIPT_CHARACTERS) return `Your script has ${text.length.toLocaleString()} characters. Please shorten it to ${MAX_SCRIPT_CHARACTERS.toLocaleString()} or fewer; nothing has been removed.`;
+  if (countWords(text) > MAX_SCRIPT_WORDS) return 'This prototype has a technical limit of 450 words per film. Nothing has been removed.';
   return null;
 }
 
@@ -46,4 +48,17 @@ export function safeDownloadURL(value, origin, jobId) {
 
 export function displayProgress(value) {
   return typeof value === 'number' && Number.isFinite(value) ? Math.min(100, Math.max(0, value)) : null;
+}
+
+export function formatDuration(seconds) {
+  if (typeof seconds !== 'number' || !Number.isFinite(seconds) || seconds <= 0) return null;
+  const rounded = Math.round(seconds);
+  return `${Math.floor(rounded / 60)}:${String(rounded % 60).padStart(2, '0')}`;
+}
+
+export function completedFilmNote(job) {
+  const duration = formatDuration(job.duration_seconds);
+  const advisory = typeof job.duration_advisory === 'string' ? job.duration_advisory.slice(0, 500) : '';
+  return [duration ? `Duration ${duration}.` : '', advisory,
+    'Download your MP4 and watch it before publishing. This prototype does not publish your film.'].filter(Boolean).join(' ');
 }

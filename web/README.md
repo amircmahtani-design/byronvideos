@@ -18,7 +18,8 @@ Queued/running/rendering/processing and complete/completed/done/succeeded are re
 - No remote fonts, analytics, trackers, third-party API requests or media fallbacks.
 - Original file objects and exact script are submitted; no client-side image alterations, shortening, rewriting or stock image substitution.
 - Order changes have labelled buttons rather than drag-only interaction.
-- Client limits: 4–5 JPEG/PNG files; 20 MiB per file; 4,000 script characters. **The server must validate actual image bytes, dimensions, MIME, total size and duration independently.**
+- Client technical limits: 4–5 JPEG/PNG files; 20 MiB per file; 4,000 script characters and 450 words. **The server must validate actual image bytes, dimensions, MIME, total size and the separate 300-second processing ceiling independently.** The usual 90–180 seconds is advisory only, with no minimum word count or automatic voice-speed changes.
+- Completed responses can include `duration_seconds` and `duration_advisory`. These are informational beside Download; a duration advisory never hides or disables the completed MP4.
 - The browser stores only the active job reference in session storage to recover after reload. Script and paintings are not persisted. File previews use temporary object URLs.
 - Duplicate submission is blocked while a job is active. A lost POST connection is not automatically retried: it may already have created a job.
 - Poll interruption can be retried without resubmitting. A known failed/expired job unlocks the input controls. Successful completion offers Download and Make another film.
@@ -39,4 +40,4 @@ node web/ui.test.cjs
 
 The optional suite uses **mocked APIs and synthetic one-pixel images**. It is not an end-to-end video-generation test. It checks the disabled/unavailable state, exact wording and order, double submission, reload recovery, completion/download, uncertain POST and phone overflow. If available, screenshots are written locally as `web/qa-ipad.png` and `web/qa-phone.png`; do not commit them automatically.
 
-At implementation time, the seven core tests passed and JavaScript parsed successfully. Browser execution was blocked by the environment's Chromium/process sandbox; therefore visual/device QA is not claimed. The typeface names prefer locally installed Playfair Display and Cormorant Garamond, with Georgia fallback. No fonts are fetched.
+For the duration-policy correction, nine core tests passed and JavaScript parsed successfully. Browser execution was blocked by the environment's Chromium/process sandbox; therefore visual/device QA is not claimed. The typeface names prefer locally installed Playfair Display and Cormorant Garamond, with Georgia fallback. No fonts are fetched.
