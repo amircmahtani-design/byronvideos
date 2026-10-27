@@ -29,6 +29,14 @@ credential reader, new public endpoint, authentication change or paid request.
   validation fails until those decisions are explicit. This is not an approved
   aesthetic preset. No credentials belong in this file.
 
+The generated-motion extension in [`style-guide/motion-planning`](../style-guide/motion-planning/PROTOCOL.md)
+locally compiles and freezes a varied, source-supported motion plan. It does not
+upload to vision services, reorder scenes, infer final approval or activate fal.
+Its current feature records come from local source inspection; automatic feature
+extraction is not implemented or represented as solved. The future worker must
+load trusted saved review records rather than accept client-invented capabilities.
+No new UI is added.
+
 The existing browser already displays photos 1–5 and has labelled Move earlier /
 Move later / Remove buttons. This order, not an AI sequence, is authoritative.
 The server must still validate original image bytes, dimensions and MIME before
@@ -120,6 +128,7 @@ copied wholesale into this public repository.
 python -m pytest -q tests/test_hosted_setup.py
 python -m pytest -q
 python -m byron_video.style --check
+python -m byron_video.motion_planning --check
 node --test web/core.test.mjs
 node --check web/app.mjs
 ```

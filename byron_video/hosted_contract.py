@@ -5,7 +5,7 @@ from .engine import validate_script, narration_text
 from .elevenlabs_adapter import fingerprint, plan_requests
 
 
-def freeze_job(raw_script, ordered_images, narration_profile, visual_style_sha256):
+def freeze_job(raw_script, ordered_images, narration_profile, visual_style_sha256, *, motion_plan=None, narration_timing_plan=None):
     validate_script(raw_script)
     if not isinstance(ordered_images, list) or not 4 <= len(ordered_images) <= 5:
         raise ValueError('Choose four or five numbered images.')
@@ -31,6 +31,9 @@ def freeze_job(raw_script, ordered_images, narration_profile, visual_style_sha25
               'narration_requests': plan_requests(spoken, narration_profile),
               'sequence_policy': 'explicit_numbered_order_no_ai_reordering',
               'publication': 'private_no_automatic_publish'}
+    if motion_plan is not None:
+        from .motion_planning import validate_plan
+        result['motion_plan'] = validate_plan(motion_plan, ordered_images, result['narrated_text_sha256'], narration_timing_plan)
     result['sha256'] = fingerprint(result)
     return result
 
