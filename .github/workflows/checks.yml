@@ -22,10 +22,7 @@ jobs:
         with:
           node-version: '22'
       - name: Install media-test runtime
-        run: |
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends -y ffmpeg
-          ffmpeg -version
+        run: sudo --preserve-env=GITHUB_ACTIONS python3 scripts/install_ci_ffmpeg.py
       - run: python -m pip install -r requirements-test.txt
       - run: python -m byron_video.style --check
       - run: python -m pytest -q
