@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "version": "elevenlabs-draft-0.1.0",
+  "status": "DRAFT",
+  "provider": "elevenlabs",
+  "voice_id": null,
+  "model_id": "eleven_multilingual_v2",
+  "voice_settings": null,
+  "output_format": "mp3_44100_128",
+  "seed": 0,
+  "apply_text_normalization": "off"
+}
