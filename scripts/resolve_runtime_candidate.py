@@ -53,6 +53,21 @@ def download_wheel(row,directory):
     need(digest.hexdigest()==row['sha256'],'Downloaded dependency differs from official resolution hash.')
     return dict(file=row['file'],sha256=row['sha256'],bytes=size)
 
+def apt_source_diagnostic(fields):
+    """Bounded source structure only: never raw text, credentials or environment."""
+    def safe(value, limit=256):
+        return ''.join(c if c.isascii() and (c.isalnum() or c in '/._+ -') else '?' for c in str(value)[:limit])
+    result={'field_names':[safe(k,64) for k in sorted(fields)[:16]]}
+    for key in ('Types','Suites','Components','Signed-By'):
+        if key in fields:result[key]=safe(fields[key])
+    result['uri_locations']=[]
+    for uri in fields.get('URIs','').split()[:8]:
+        try:
+            parsed=urllib.parse.urlsplit(uri)
+            result['uri_locations'].append({'host':safe(parsed.hostname or '',128),'path':safe(parsed.path,256)})
+        except ValueError:result['uri_locations'].append({'invalid_uri':True})
+    return json.dumps(result,sort_keys=True,separators=(',',':'))
+
 def validate_apt_sources(root=Path('/etc/apt')):
     need(not (root/'sources.list').exists() or not (root/'sources.list').read_text().strip(),'Unexpected legacy apt sources.')
     files=list((root/'sources.list.d').iterdir());need(files and all(p.suffix=='.sources' and not p.is_symlink() for p in files),'Only explicit Debian deb822 sources accepted.')
@@ -68,7 +83,7 @@ def validate_apt_sources(root=Path('/etc/apt')):
             need(set(fields)<= {'Types','URIs','Suites','Components','Signed-By'} and fields.get('Types')=='deb'
                  and fields.get('Signed-By')=='/usr/share/keyrings/debian-archive-keyring.gpg'
                  and set(fields.get('Suites','').split())<= {'trixie','trixie-updates','trixie-security'}
-                 and fields.get('Components')=='main','Only existing signed Debian trixie repositories accepted.')
+                 and fields.get('Components')=='main','Only existing signed Debian trixie repositories accepted; source_structure='+apt_source_diagnostic(fields))
             for uri in fields['URIs'].split():
                 parsed=urllib.parse.urlsplit(uri)
                 need(parsed.scheme in ('http','https') and parsed.hostname=='deb.debian.org' and parsed.port is None

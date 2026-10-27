@@ -29,6 +29,25 @@ class RuntimeResolutionChecks(unittest.TestCase):
             for bad in (text.replace('deb.debian.org','evil.test'),text.replace('Signed-By:','Trusted:'),text.replace('trixie trixie-updates','unstable')):
                 source.write_text(bad)
                 with self.assertRaises(ValueError):r.validate_apt_sources(root)
+    def test_source_diagnostic_strips_uri_credentials_query_and_unknown_values(self):
+        fields={'Types':'deb-src','URIs':'https://USERSECRET:PASSSECRET@deb.debian.org/debian?QUERYSECRET#FRAGMENTSECRET',
+                'Suites':'trixie','Components':'main','Signed-By':'/usr/share/keyrings/debian-archive-keyring.gpg',
+                'Unknown':'PRIVATEVALUE'}
+        text=r.apt_source_diagnostic(fields);value=json.loads(text)
+        self.assertEqual(value['uri_locations'],[{'host':'deb.debian.org','path':'/debian'}])
+        self.assertEqual(value['Types'],'deb-src');self.assertIn('Unknown',value['field_names'])
+        for secret in ('USERSECRET','PASSSECRET','QUERYSECRET','FRAGMENTSECRET','PRIVATEVALUE'):
+            self.assertNotIn(secret,text)
+        self.assertLess(len(r.apt_source_diagnostic({'URIs':'x'*100000,'Types':'a'*100000})),1024)
+
+    def test_rejected_source_includes_safe_structure_without_widening_trust(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp);(root/'sources.list.d').mkdir()
+            source=root/'sources.list.d/debian.sources'
+            source.write_text('# comment-only block\n\nTypes: deb\nURIs: http://deb.debian.org/debian\nSuites: trixie\nComponents: main\nSigned-By: /usr/share/keyrings/debian-archive-keyring.gpg\n')
+            with self.assertRaisesRegex(ValueError,r'source_structure=.*field_names.*\[\]'):
+                r.validate_apt_sources(root)
+
     def test_no_ci_opt_in_performs_no_subprocess_or_network(self):
         with patch.dict(os.environ,{'GITHUB_ACTIONS':'false'}),patch.object(r,'command',side_effect=AssertionError('command forbidden')):
             with self.assertRaises(ValueError):r.main(['--base-image','python@sha256:'+'a'*64,'--python-version','3.12.14','--input','none','--output','none'])
