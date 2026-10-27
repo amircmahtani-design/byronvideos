@@ -42,3 +42,60 @@ node web/ui.test.cjs
 The optional suite uses **mocked APIs and synthetic one-pixel images**. It is not an end-to-end video-generation test. It checks the disabled/unavailable state, exact wording and order, double submission, reload recovery, completion/download, uncertain POST and phone overflow. If available, screenshots are written locally as `web/qa-ipad.png` and `web/qa-phone.png`; do not commit them automatically.
 
 For the capacity correction, ten core tests passed and JavaScript parsed successfully. Browser execution was blocked by the environment's Chromium/process sandbox; therefore visual/device QA is not claimed. The typeface names prefer locally installed Playfair Display and Cormorant Garamond, with Georgia fallback. No fonts are fetched.
+
+## Explicit hosted fixture transport (disabled by default)
+
+`app.mjs` preserves the local multipart flow above. Only when local readiness is
+absent does it inspect `GET /api/creator-capabilities`. The hosted branch requires
+all of: `enabled: true`, `mode: "hosted"`, `protocol_version: 1`,
+`live_release: false`, `synthetic_fixture: true`, and a session CSRF token.
+It labels the workspace **no live generation**. A static deployment, missing capability, or a bare live-release claim does not
+enable this branch. The separate accepted-runtime branch requires
+`live_release: true`, `synthetic_fixture: false` and a 64-hex
+`runtime_release_sha256` issued by the authenticated, signed-acceptance-bound
+backend assembly (see `hosted/runtime-assembly.md`). No such runtime is enabled
+by this source.
+This client does not activate infrastructure, authentication or provider calls.
+
+The explicit injected backend contract is:
+
+1. `POST /api/uploads`: original multipart `images` in displayed order, with
+   `Idempotency-Key` and `X-CSRF-Token`; returns `upload_id` and exactly four or five
+   unique `{id, position}` receipts in numbered order. The backend independently
+   validates and persists owner-bound original image bytes.
+2. `POST /api/jobs`: JSON `{script, images: [{id, position}], voice_id}`, using
+   the **same** per-submission idempotency key and CSRF token. Voice, script and
+   file order are frozen before either request. No provider keys enter the client.
+3. Poll the existing owner-scoped status and download endpoints. `HOLD` stays
+   locked against replacement submissions. Status-only recovery is the default;
+   independently terminal queue/capture HOLDs may expose explicit bounded resume. A
+   missing hosted job also remains locked pending administrator review.
+
+The transport never retries either POST automatically. An uncertain upload result
+never proceeds to job submission. Lost/malformed job receipts and conflicts remain
+locked. Session storage retains only opaque pending reference/stage and active job
+reference/mode, not script, images, voice selection, CSRF or provider credentials.
+Reload with a pending unknown submission stays locked; it does not resubmit.
+A definite validation/auth rejection can be corrected and explicitly submitted
+again. Before either hosted POST, the opaque reference/stage must round-trip through
+session storage. If storage is unavailable, no first upload is sent. If its later
+checkpoint fails after upload, no job request is sent and the previous reference
+stays locked. A known job ID/mode must round-trip before the pending reference is
+cleared; otherwise the known job remains accessible in memory and reload stays locked.
+For an uncertain job receipt, Check film status uses only
+`GET /api/submissions/{key}` to recover the existing owner-bound job. A missing or
+unavailable result remains locked, never permission to resubmit. The opaque
+reference is displayed for administrator review. Unknown upload outcomes still
+require administrator review.
+
+`node --test web/core.test.mjs` now includes offline hosted transport and recovery checks. These use injected responses and synthetic files, not browser interaction
+or real authentication/storage/provider verification. Real backend adapters and
+activation remain separately required; this is not a finished live film service.
+
+### Exceptional worker continuation
+
+The hidden-by-default **Resume this film** control appears only when the live
+accepted backend confirms a resumable terminal queue/capture HOLD. It keeps the
+same job and frozen inputs, requires a separately persisted opaque attempt key,
+and never automatically retries. Unknown outcomes remain locked across reload.
+See `hosted/resume-control.md` for the three-attempt bound and exclusions.

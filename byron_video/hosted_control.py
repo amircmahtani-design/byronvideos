@@ -51,6 +51,7 @@ from starlette.background import BackgroundTask
 from .engine import MAX_SCRIPT_CHARS, validate_script
 from .hosted_contract import freeze_job
 from .elevenlabs_adapter import validate_profile
+from .voices import minimal_catalog, VoiceUnavailable
 
 SAFE_ID = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
 JOB_ID = re.compile(r"^[a-f0-9]{32}$")
@@ -197,22 +198,32 @@ class JobRecord:
 
     @property
     def artifact(self):
-        return VerifiedArtifact(**json.loads(self.artifact_json)) if self.artifact_json else None
+        if not self.artifact_json: return None
+        value=json.loads(self.artifact_json)
+        if value.get('artifact_kind') == 'PRIVATE_DRAFT_PREVIEW':
+            from .preview_worker import PreviewArtifact
+            return PreviewArtifact(**value)
+        return VerifiedArtifact(**value)
 
     def public(self):
         # No input text, image IDs/storage references, execution IDs or owner ID.
         messages = {"HOLD": "Submission needs review. It will not be retried automatically.",
                     "queued": "The render task was accepted.", "running": "The render task is running.",
-                    "complete": "Your verified film is ready to download."}
+                    "complete": "Your verified film is ready to download.",
+                    "draft_preview_ready": "Your private DRAFT preview is ready. It is not approved for publication."}
         require(self.state in messages, "Invalid stored job state.")
-        result = {"id": self.id, "status": self.state, "progress": 100 if self.state == "complete" else 0,
+        result = {"id": self.id, "status": self.state, "progress": 100 if self.state in {"complete","draft_preview_ready"} else 0,
                   "message": messages[self.state], "snapshot_sha256": self.snapshot_sha256,
                   "mode": "hosted_setup", "live_release": False}
-        if self.state == "complete":
+        if self.state in {"complete","draft_preview_ready"}:
             require(self.artifact is not None, "Completion proof is missing.")
             self.artifact.validate(self)
+            require((self.state=='draft_preview_ready') == (getattr(self.artifact,'artifact_kind',None)=='PRIVATE_DRAFT_PREVIEW'), 'Artifact kind and completion state disagree.')
             result["download_url"] = f"/api/jobs/{self.id}/video"
             result["duration_seconds"] = self.artifact.duration_seconds
+            if self.state == 'draft_preview_ready':
+                require(getattr(self.artifact,'artifact_kind',None)=='PRIVATE_DRAFT_PREVIEW','Draft proof required.')
+                result.update(artifact_kind='PRIVATE_DRAFT_PREVIEW',draft=True)
         return result
 
 
@@ -223,6 +234,7 @@ class IdempotencyConflict(ValueError):
 class DurableJobStore(Protocol):
     """Production implementation MUST preserve these atomic/immutable semantics."""
     def find_request(self, owner_id: str, key: str, request_sha256: str) -> JobRecord | None: ...
+    def find_submission(self, owner_id: str, key: str) -> JobRecord | None: ...
     def reserve(self, owner_id: str, key: str, request_sha256: str, snapshot: dict) -> tuple[JobRecord, bool]: ...
     def get(self, owner_id: str, job_id: str) -> JobRecord | None: ...
     def record_dispatch(self, owner_id: str, job_id: str, receipt: DispatchReceipt) -> JobRecord: ...
@@ -267,6 +279,10 @@ class SQLiteFixtureStore:
             if job is not None and job.request_sha256 != request_sha256:
                 raise IdempotencyConflict("This submission key already belongs to different input.")
             return job
+
+    def find_submission(self, owner_id, key):
+        with self.lock:
+            return self._row("SELECT * FROM control_job WHERE owner_id=? AND idempotency_key=?", (owner_id, key))
 
     def get(self, owner_id, job_id):
         with self.lock:
@@ -317,7 +333,7 @@ class SQLiteFixtureStore:
         with self.lock:
             job = self.get(owner_id, job_id)
             require(job is not None and job.state in {"queued", "running"})
-            require(isinstance(proof, VerifiedArtifact))
+            require(type(proof) is VerifiedArtifact)
             proof.validate(job)
             count = self.db.execute("UPDATE control_job SET state='complete',artifact_json=? WHERE id=? AND owner_id=? AND state IN ('queued','running')",
                                     (canonical(asdict(proof)), job_id, owner_id)).rowcount
@@ -335,6 +351,7 @@ class Submission(BaseModel):
     model_config = ConfigDict(extra="forbid")
     script: StrictStr = Field(min_length=1, max_length=MAX_SCRIPT_CHARS)
     images: list[ImageSelection] = Field(min_length=4, max_length=5)
+    voice_id: StrictStr | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{8,80}$")
 
 
 def validate_private_plan(value):
@@ -351,8 +368,14 @@ def validate_private_plan(value):
     visit(value)
     # Detach nested objects and reject NaN/non-JSON objects before reservation.
     frozen = json.loads(canonical(value))
-    require(set(frozen) == {"schema_version", "status", "visual_style_sha256", "narration_profile",
-                            "motion_policy_sha256", "output"}, "The complete fixed processing plan is required.")
+    required={"schema_version", "status", "visual_style_sha256", "narration_profile", "motion_policy_sha256", "output"}
+    require(set(frozen) in (required,required|{'preview_contract'},required|{'preview_contract','exact_film_contract'}), "The complete fixed processing plan is required.")
+    if 'preview_contract' in frozen:
+        from .private_preview import validate_intent
+        validate_intent(frozen['preview_contract'])
+    if 'exact_film_contract' in frozen:
+        from .exact_film_runtime import validate_contract
+        validate_contract(frozen['exact_film_contract'])
     require(type(frozen["schema_version"]) is int and frozen["schema_version"] == 1
             and frozen["status"] == "DRAFT_NOT_ACTIVATED", "This is an inactive draft plan only.")
     for name in ("visual_style_sha256", "motion_policy_sha256"):
@@ -424,8 +447,9 @@ def _verified_spool(reader: Callable, owner: Principal, job: JobRecord, proof: V
 
 
 class PrivateControlMiddleware:
-    def __init__(self, app):
+    def __init__(self, app, upload_enabled=False):
         self.app = app
+        self.upload_enabled = upload_enabled
 
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
@@ -436,7 +460,8 @@ class PrivateControlMiddleware:
             message = await receive()
             if message["type"] == "http.request":
                 consumed += len(message.get("body", b""))
-                if consumed > MAX_CONTROL_BODY_BYTES:
+                limit = (100 * 1024 * 1024 + MAX_CONTROL_BODY_BYTES) if self.upload_enabled and scope.get("path") == "/api/uploads" else MAX_CONTROL_BODY_BYTES
+                if consumed > limit:
                     raise HTTPException(413, "Control request is too large. Upload images through the reviewed private upload boundary.")
             return message
         async def private_send(message):
@@ -451,14 +476,33 @@ class PrivateControlMiddleware:
 def create_app(*, principal_resolver: Callable | None = None, store: DurableJobStore | None = None,
                dispatcher: Callable | None = None, upload_resolver: Callable | None = None,
                plan_provider: Callable | None = None, artifact_verifier: Callable | None = None,
-               artifact_reader: Callable | None = None) -> FastAPI:
+               artifact_reader: Callable | None = None, voice_provider: Callable | None = None,
+               default_voice_provider: Callable | None = None, creator_access=None,
+               private_upload_store=None, hosted_client_enabled=False, runtime_binding=None, resume_status_provider=None) -> FastAPI:
     """Construct an unmounted inactive boundary. No injected dependency is trusted
     from request headers/JSON automatically. The real auth adapter must verify
     credentials AND enforce its cookie/Origin/CSRF policy before returning a
     Principal. A principal resolver is not an approval to activate the service.
     """
     app = FastAPI(title="Byron hosted setup boundary — inactive", docs_url=None, redoc_url=None, openapi_url=None)
-    app.add_middleware(PrivateControlMiddleware)
+    if runtime_binding is not None:
+        from .runtime_assembly import AcceptedRuntimeBinding
+        if type(runtime_binding) is not AcceptedRuntimeBinding or not hosted_client_enabled or not runtime_binding.matches(
+                dispatcher=dispatcher, store=store, uploads=private_upload_store, access=creator_access,
+                voices=voice_provider, artifact_verifier=artifact_verifier, artifact_reader=artifact_reader,
+                plan_provider=plan_provider, default_voice_provider=default_voice_provider):
+            raise ValueError("Runtime acceptance must bind every configured private adapter.")
+    if hosted_client_enabled:
+        if (creator_access is None or private_upload_store is None or store is None or dispatcher is None
+                or plan_provider is None or voice_provider is None
+                or (runtime_binding is None and getattr(dispatcher, "synthetic_fixture", False) is not True)):
+            raise ValueError("The offline hosted client requires all reviewed fixture adapters; live dispatch remains disabled.")
+        if upload_resolver is not None:
+            raise ValueError("Hosted client uploads must resolve through the same private upload store.")
+        upload_resolver = private_upload_store.resolve
+    app.add_middleware(PrivateControlMiddleware, upload_enabled=hosted_client_enabled)
+    from .hosted_uploads import install_creator_routes
+    install_creator_routes(app, access=creator_access, storage=private_upload_store, enabled=hosted_client_enabled, runtime_binding=runtime_binding, plan_provider=plan_provider)
 
     @app.exception_handler(RequestValidationError)
     async def invalid_request(_request, error):
@@ -470,6 +514,13 @@ def create_app(*, principal_resolver: Callable | None = None, store: DurableJobS
         return JSONResponse({"detail": message}, status_code=422)
 
     async def principal(request):
+        if runtime_binding is not None:
+            try:
+                runtime_binding.check()
+            except Exception:
+                raise HTTPException(503, "Runtime acceptance is unavailable or expired; no new operation is permitted.") from None
+        if hosted_client_enabled:
+            return (await creator_access.authorize(request)).principal
         if principal_resolver is None:
             raise HTTPException(401, "Authentication is not configured.")
         try:
@@ -499,12 +550,55 @@ def create_app(*, principal_resolver: Callable | None = None, store: DurableJobS
         return {"ready": False, "mode": "hosted_setup", "live_release": False,
                 "message": "Inactive control boundary. Authentication, durable hosting and live dispatch are not activated."}
 
+    async def catalog(owner):
+        if voice_provider is None:
+            raise HTTPException(503, "ElevenLabs is not connected yet.")
+        try:
+            return minimal_catalog(await invoke(voice_provider, owner))
+        except VoiceUnavailable as exc:
+            raise HTTPException(503, str(exc)) from None
+        except Exception:
+            raise HTTPException(503, "Saved voices could not be refreshed. Please try again.") from None
+
+    @app.get("/api/voices")
+    async def voices(request: Request):
+        owner = await principal(request)
+        items = await catalog(owner)
+        default_id = None
+        if default_voice_provider is not None:
+            try:
+                candidate = await invoke(default_voice_provider, owner)
+                default_id = candidate if any(v["id"] == candidate for v in items) else None
+            except Exception:
+                raise HTTPException(503, "The default narrator needs administrator attention.") from None
+        return {"voices": items, "default_voice_id": default_id}
+
+    @app.get("/api/submissions/{key}")
+    async def recover_submission(request: Request, key: str):
+        if not hosted_client_enabled:
+            raise HTTPException(503, "Hosted submission recovery is not activated.")
+        owner = await principal(request)
+        if not re.fullmatch(r"[A-Za-z0-9_-]{16,128}", key):
+            raise HTTPException(422, "Use the saved submission reference.")
+        try:
+            job = await invoke(store.find_submission, owner.subject, key)
+            if job is None:
+                # Absence can race an in-flight commit: NEVER authorize resubmission.
+                raise HTTPException(404, "No receipt is available yet. Keep this reference; do not submit again.")
+            require(job.owner_id == owner.subject and job.idempotency_key == key and bool(JOB_ID.fullmatch(job.id)))
+            job.snapshot
+            return {"id": job.id, "status": job.state}
+        except HTTPException:
+            raise
+        except Exception:
+            raise HTTPException(503, "Submission recovery needs review. Nothing was retried.") from None
+
     @app.post("/api/jobs", status_code=202)
     async def submit(request: Request, body: Submission, idempotency_key: str | None = Header(default=None)):
         owner = await principal(request)
         if store is None or dispatcher is None or upload_resolver is None or plan_provider is None:
             raise HTTPException(503, "Hosted conversion is not configured.")
-        if getattr(dispatcher, "synthetic_fixture", False) is not True:
+        if runtime_binding is None and getattr(dispatcher, "synthetic_fixture", False) is not True:
             raise HTTPException(503, "Live dispatch is not activated in this candidate.")
         if not isinstance(idempotency_key, str) or not re.fullmatch(r"[A-Za-z0-9_-]{16,128}", idempotency_key):
             raise HTTPException(422, "A stable, random Idempotency-Key is required.")
@@ -519,7 +613,10 @@ def create_app(*, principal_resolver: Callable | None = None, store: DurableJobS
         selections = [item.model_dump() for item in body.images]
         if [item["position"] for item in selections] != list(range(1, len(selections) + 1)) or len({x["id"] for x in selections}) != len(selections):
             raise HTTPException(422, "Use four or five unique paintings in explicit numbered order.")
-        request_hash = digest({"script": body.script, "images": selections})
+        request_input = {"script": body.script, "images": selections}
+        if body.voice_id is not None:
+            request_input["voice_id"] = body.voice_id
+        request_hash = digest(request_input)
         try:
             existing = store.find_request(owner.subject, idempotency_key, request_hash)
             if existing:
@@ -544,6 +641,17 @@ def create_app(*, principal_resolver: Callable | None = None, store: DurableJobS
             plan = validate_private_plan(await invoke(plan_provider, owner))
         except Exception:
             raise HTTPException(503, "The trusted processing plan is not ready.") from None
+        if body.voice_id is not None or voice_provider is not None:
+            selected_id = body.voice_id
+            if selected_id is None and default_voice_provider is not None:
+                try:
+                    selected_id = await invoke(default_voice_provider, owner)
+                except Exception:
+                    raise HTTPException(503, "The default narrator needs administrator attention.") from None
+            selected = next((v for v in await catalog(owner) if v["id"] == selected_id), None)
+            if selected is None:
+                raise HTTPException(422, "Choose an available saved voice. The previous voice may have been removed.")
+            plan["narration_profile"]["voice_id"] = selected["id"]
         try:
             narration_contract = freeze_job(body.script,
                 [{"id": item["id"], "position": item["position"], "sha256": item["sha256"]} for item in verified],
@@ -558,6 +666,9 @@ def create_app(*, principal_resolver: Callable | None = None, store: DurableJobS
                     "processing_plan": plan, "processing_plan_sha256": digest(plan),
                     "narration_contract": narration_contract,
                     "publication": "private_no_automatic_publish", "live_release": False}
+        if runtime_binding is not None:
+            snapshot["runtime_acceptance_sha256"] = runtime_binding.release_sha256
+            snapshot["runtime_config_sha256"] = runtime_binding.config_sha256
         try:
             job, created = store.reserve(owner.subject, idempotency_key, request_hash, snapshot)
         except IdempotencyConflict as exc:
@@ -567,6 +678,8 @@ def create_app(*, principal_resolver: Callable | None = None, store: DurableJobS
                        "idempotency_sha256": hashlib.sha256(idempotency_key.encode()).hexdigest(),
                        "snapshot_sha256": job.snapshot_sha256, "frozen_job": job.snapshot}
             try:
+                if runtime_binding is not None:
+                    runtime_binding.check()  # Acceptance may expire while validating inputs.
                 receipt = await invoke(dispatcher, handoff)
                 require(isinstance(receipt, DispatchReceipt))
                 receipt.validate(job)
@@ -581,8 +694,18 @@ def create_app(*, principal_resolver: Callable | None = None, store: DurableJobS
     async def status(request: Request, job_id: str):
         owner = await principal(request)
         try:
-            result = owned(owner, job_id).public()
-            if result["status"] == "complete" and (artifact_verifier is None or artifact_reader is None):
+            job = owned(owner, job_id)
+            result = job.public()
+            if resume_status_provider is not None:
+                result.update(await invoke(resume_status_provider, owner, job))
+            if runtime_binding is not None:
+                result.update(mode="hosted", live_release=True, runtime_release_sha256=runtime_binding.release_sha256)
+            preview_intent=job.snapshot.get('processing_plan',{}).get('preview_contract')
+            if preview_intent is not None:
+                from .private_preview import validate_intent
+                validate_intent(preview_intent)
+                result.update(mode='hosted_private_preview',live_release=False,private_preview=True)
+            if result["status"] in {"complete","draft_preview_ready"} and (artifact_verifier is None or artifact_reader is None):
                 result.pop("download_url", None)
                 result["message"] = "The film is verified, but the private download service is not configured."
             return result
@@ -597,12 +720,13 @@ def create_app(*, principal_resolver: Callable | None = None, store: DurableJobS
             expected = job.artifact
         except (ValueError, TypeError, KeyError):
             raise HTTPException(503, "Stored film verification needs review.") from None
-        if job.state != "complete" or expected is None:
+        if job.state not in {"complete","draft_preview_ready"} or expected is None:
             raise HTTPException(409, "No verified finished film is available.")
         if artifact_verifier is None or artifact_reader is None:
             raise HTTPException(503, "Verified private downloads are not configured.")
         try:
             expected.validate(job)
+            require((job.state=='draft_preview_ready') == (getattr(expected,'artifact_kind',None)=='PRIVATE_DRAFT_PREVIEW'), 'Artifact kind and completion state disagree.')
             proof = await invoke(artifact_verifier, owner, job, expected.artifact_id)
             require(isinstance(proof, VerifiedArtifact) and proof == expected, "Artifact verification changed.")
             proof.validate(job)
@@ -615,8 +739,12 @@ def create_app(*, principal_resolver: Callable | None = None, store: DurableJobS
                     yield chunk
             finally:
                 spool.close()
+        filename='byron-DRAFT-'+job.id+'.mp4' if job.state=='draft_preview_ready' else 'byron-film.mp4'
         return StreamingResponse(chunks(), media_type="video/mp4",
-                                 headers={"Content-Disposition": 'attachment; filename="byron-film.mp4"',
+                                 headers={"Content-Disposition": 'attachment; filename="'+filename+'"',
+                                          "Cache-Control": "private, no-store",
+                                          "X-Content-Type-Options": "nosniff",
+                                          "X-Byron-Artifact-Kind": "PRIVATE_DRAFT_PREVIEW" if job.state=="draft_preview_ready" else "rendered_video",
                                           "Content-Length": str(proof.byte_count)},
                                  background=BackgroundTask(spool.close))
 

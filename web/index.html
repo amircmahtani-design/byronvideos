@@ -46,6 +46,12 @@
           <p id="empty-images" class="empty">Your paintings will appear here, in order.</p>
           <p class="rights">Please use paintings and reproductions you have the right to publish.</p>
         </section>
+        <section class="card" aria-labelledby="voice-title">
+          <h2 id="voice-title">Narrator</h2>
+          <label for="voice">Saved ElevenLabs voice</label>
+          <div class="connection-row"><select id="voice" disabled aria-describedby="voice-status"><option value="">ElevenLabs not connected</option></select><button id="refresh-voices" type="button" class="quiet small">Refresh voices</button></div>
+          <p id="voice-status" class="muted" role="status">Your saved voices will appear when ElevenLabs is connected.</p>
+        </section>
         <section class="finish-card" aria-labelledby="convert-title">
           <div><p class="eyebrow">Everything else is taken care of</p><h2 id="convert-title">Ready when you are.</h2><p>British male narration · bottom captions<br>gentle motion · smooth fades · widescreen MP4</p><p class="muted">The provisional synthetic voice is not an imitation of a named performer.</p></div>
           <button id="convert" type="submit" class="primary" disabled>Convert to film <span aria-hidden="true">→</span></button>
@@ -58,10 +64,18 @@
       <p id="job-message" role="status" aria-live="polite"></p>
       <progress id="progress" max="100" aria-label="Rendering progress"></progress>
       <p id="job-note" class="muted">Keep this page open. Larger scripts take longer; the progress shown comes from the renderer.</p>
-      <div class="job-actions"><button id="resume" class="quiet" type="button" hidden>Check film status</button><a id="download" class="primary" download="byron-film.mp4" hidden>Download MP4 <span aria-hidden="true">↓</span></a><button id="new-film" type="button" class="quiet" hidden>Make another film</button></div>
+      <div class="job-actions"><button id="resume" class="quiet" type="button" hidden>Check film status</button>
+        <button id="resume-film" type="button" class="quiet" hidden>Resume this film</button><a id="download" class="primary" download="byron-film.mp4" hidden>Download MP4 <span aria-hidden="true">↓</span></a><button id="new-film" type="button" class="quiet" hidden>Make another film</button></div>
+      <div id="exact-actions" hidden><p id="exact-note" class="muted"></p><div class="job-actions">
+        <button id="approve-film" type="button" class="quiet" hidden>Approve THIS film &amp; get clean copy</button>
+        <button id="renew-preview" type="button" class="quiet" hidden>Renew private preview access</button>
+        <button id="renew-clean" type="button" class="quiet" hidden>Renew clean copy access</button>
+        <a id="clean-download" class="primary" hidden>Download clean copy</a>
+        <button id="check-exact" type="button" class="quiet">Check this film status</button>
+      </div></div>
     </section>
     <noscript><p class="error">This local creator needs JavaScript. Your files have not been uploaded.</p></noscript>
   </main>
-  <footer><p><a href="https://www.badmaddangerous.com">Bad, Mad &amp; Dangerous — read the essays</a></p><span>Made from the art you choose. Nothing published without you.</span></footer>
+  <footer><p><a href="https://www.badmaddangerous.com">Bad, Mad &amp; Dangerous - read the essays</a></p><span>Made from the art you choose. Nothing published without you. <a href="admin.html">Administrator</a></span></footer>
 </body>
 </html>

@@ -1,7 +1,10 @@
-import {MAX_SCRIPT_CHARACTERS, countWords, validateScript, validateImages, moveItem, safeJobId, safeDownloadURL, displayProgress, completedFilmNote} from './core.mjs';
+import {exactCheckpoint,persistExact,exactFilmAction,exactActionResolved} from './exact-film.mjs';
+import {MAX_SCRIPT_CHARACTERS, countWords, validateScript, validateImages, moveItem, safeJobId, safeDownloadURL, displayProgress, isPrivateDraft, completedFilmNote, refreshVoiceState, voiceLabel} from './core.mjs';
+
+import {hostedCapability, freezeSubmission, submitHosted, persistPending, persistHostedJob, recoverSubmission, resumeCheckpoint, persistResume, resumeResolved, resumeHosted} from './hosted.mjs';
 
 const $ = id => document.getElementById(id);
-const ui = Object.fromEntries(['creator','inputs','script','script-count','images','paintings','empty-images','convert','connection','reconnect','error','job','job-title','job-message','job-note','progress','download','new-film','resume','prototype-title','prototype-copy'].map(id => [id, $(id)]));
+const ui = Object.fromEntries(['exact-actions','exact-note','approve-film','renew-preview','renew-clean','clean-download','check-exact','voice','refresh-voices','voice-status','creator','inputs','script','script-count','images','paintings','empty-images','convert','connection','reconnect','error','job','job-title','job-message','job-note','progress','download','new-film','resume','resume-film','prototype-title','prototype-copy'].map(id => [id, $(id)]));
 let paintings = [];
 let ready = false;
 let activeJob = null;
@@ -9,6 +12,43 @@ let busy = false;
 let timer = null;
 let pollController = null;
 let checking = false;
+let voiceState = {voices: [], selectedId: '', removed: false};
+let refreshingVoices = false;
+let localRenderer = false;
+let hosted = null;
+let loginRequired = false;
+let hostedJob = false;
+let pendingSubmission = null;
+let resumePending = null;
+let exactPending=null, exactWorking=false, exactStatus=null, exactTimer=null;
+let resumeWorking = false;
+let eligibleResumeAttempt = null;
+function showVoices() {
+  ui.voice.replaceChildren();
+  const empty = new Option(voiceState.removed ? 'Selected voice is no longer available' : 'Choose a saved voice', '');
+  ui.voice.add(empty);
+  for (const voice of voiceState.voices) ui.voice.add(new Option(voiceLabel(voice, voiceState.voices), voice.id));
+  ui.voice.value = voiceState.removed ? '' : voiceState.selectedId;
+  ui.voice.disabled = busy || localRenderer || !voiceState.voices.length;
+}
+async function refreshVoices() {
+  if (busy || refreshingVoices) return;
+  refreshingVoices = true; ui['refresh-voices'].disabled = true;
+  try {
+    const response = await timedFetch('/api/voices', {cache: 'no-store'});
+    if (!response.ok) throw new Error();
+    voiceState = refreshVoiceState(voiceState, await response.json());
+    if (voiceState.error) throw new Error();
+    showVoices();
+    ui['voice-status'].textContent = localRenderer ? 'The local prototype uses its fixed narrator. Saved ElevenLabs voices are for hosted films once connected.' : voiceState.removed ? 'Your previous voice was removed. Choose another saved voice; no substitute was selected.' : voiceState.voices.length ? 'Save a designed voice in ElevenLabs, then use Refresh voices. Your choice is fixed when a film starts.' : 'No saved designed voices found. Save a voice in ElevenLabs, then refresh.';
+  } catch {
+    voiceState = refreshVoiceState(voiceState, null);
+    ui['voice-status'].textContent = voiceState.voices.length ? 'Could not refresh voices. Your previous selection is kept. Try again shortly.' : 'ElevenLabs is not connected yet. Your saved voices will appear here after setup.';
+  } finally { refreshingVoices = false; ui['refresh-voices'].disabled = busy; }
+}
+ui.voice.addEventListener('change', () => { if (!busy) voiceState = {...voiceState, selectedId: ui.voice.value, removed: false}; });
+ui['refresh-voices'].addEventListener('click', refreshVoices);
+refreshVoices();
 
 async function timedFetch(url, options = {}, timeout = 15000) {
   const controller = new AbortController();
@@ -61,14 +101,25 @@ function showPaintings() {
 }
 async function checkRenderer() {
   if (checking || busy) return;
-  checking = true; ready = false; updateConvert(); ui.reconnect.disabled = true;
+  checking = true; ready = false; localRenderer = false; hosted = null; loginRequired = false; ui.reconnect.textContent = 'Check again'; showVoices(); updateConvert(); ui.reconnect.disabled = true;
   ui.connection.textContent = 'Checking the renderer connection…';
   try {
     const response = await timedFetch('/api/health', {cache: 'no-store'}, 10000);
     if (!response.ok) throw new Error();
     const health = await response.json();
-    if (health.ready !== true || health.mode !== 'local') throw new Error();
-    ready = true;
+    if (health.ready !== true || health.mode !== 'local') {
+      const capabilities = await timedFetch('/api/creator-capabilities', {cache:'no-store', credentials:'same-origin'});
+      if (capabilities.status === 401) loginRequired = true;
+      if (!capabilities.ok) throw new Error();
+      hosted = hostedCapability(await capabilities.json());
+      if (!hosted) throw new Error();
+      ready = true; showVoices(); await refreshVoices();
+      ui['prototype-title'].textContent = hosted.preview ? 'Private first-film DRAFT preview.' : hosted.live ? 'Private studio — creator connected.' : 'Hosted test workspace connected — no live generation.';
+      ui['prototype-copy'].textContent = hosted.preview ? 'Generate a private watermarked draft to watch and assess as a whole. It is not approved for publication. Your originals and narrator stay fixed.' : hosted.live ? 'Your original paintings are uploaded privately in the order shown. Your narrator is fixed when you start. Nothing is published automatically.' : 'This fixture workspace tests private upload order and your chosen narrator. It does not call paid providers or generate a live film. Nothing is published.';
+      ui.connection.textContent = hosted.preview ? 'Private DRAFT workspace connected. Choose your narrator and make a preview.' : hosted.live ? 'Private studio connected. Choose your narrator and make your film.' : 'Test workspace connected. Choose a narrator to test the private submission workflow.';
+      return;
+    }
+    ready = true; localRenderer = true; showVoices();
     ui['prototype-title'].textContent = 'Local prototype — renderer connected on this computer.';
     ui['prototype-copy'].textContent = 'Convert sends your files only to this local renderer. Nothing is published, and your paintings are not repainted.';
     ui.connection.textContent = 'Local renderer connected. Ready to make your film.';
@@ -78,13 +129,34 @@ async function checkRenderer() {
     ui.connection.textContent = ['localhost','127.0.0.1','[::1]'].includes(location.hostname)
       ? 'Renderer unavailable. Start the local app using the README, then check again.'
       : 'Renderer unavailable. You can prepare your script and image order, but Convert stays disabled until the API is connected.';
+    if (loginRequired) {
+      ui.connection.textContent = 'Sign in with your permitted Google account to open the private creator.';
+      ui.reconnect.textContent = 'Sign in';
+    }
   } finally { checking = false; ui.reconnect.disabled = false; updateConvert(); }
 }
 function stopPolling() { clearTimeout(timer); timer = null; pollController?.abort(); pollController = null; }
-function saveActiveJob(id) { try { if (id) sessionStorage.setItem('byron-active-job', id); else sessionStorage.removeItem('byron-active-job'); } catch { /* Private browsing may disable storage. */ } }
-function setBusy(value) { busy = value; ui.inputs.disabled = value; ui.reconnect.disabled = value; updateConvert(); }
+function saveActiveJob(id) { try { if (id) { sessionStorage.setItem('byron-active-job', id); sessionStorage.setItem('byron-active-job-mode', hostedJob ? 'hosted' : 'local'); } else { sessionStorage.removeItem('byron-active-job'); sessionStorage.removeItem('byron-active-job-mode'); } } catch { /* Private browsing may disable storage. */ } }
+function savePending(value) {
+  if (value) persistPending(sessionStorage, value); // Must round-trip before each hosted POST.
+  else { try { sessionStorage.removeItem('byron-pending-submission'); } catch { /* Keep any stale checkpoint safely locked. */ } }
+}
+function showUncertain(stage, reference, checkpointFailed = false) {
+  pendingSubmission = {key:reference,stage};
+  setBusy(true); ui.job.hidden = false; ui.download.hidden = true; ui['new-film'].hidden = true; ui.resume.hidden = stage !== 'job'; ui.progress.hidden = true;
+  ui['job-title'].textContent = 'Submission needs review';
+  ui['job-message'].textContent = checkpointFailed ? 'Your upload was accepted, but its recovery checkpoint could not be saved. No film request was sent.' : stage === 'upload' ? 'The private upload result could not be confirmed. No film request was sent.' : 'The film request may already have been accepted.';
+  ui['job-note'].textContent = 'Do not submit again. Ask the studio administrator to check submission reference ' + reference + '. Nothing will be retried automatically.';
+  ui.convert.textContent = 'Submission needs review';
+}
+function setBusy(value) { busy = value; showVoices(); ui['refresh-voices'].disabled = value || refreshingVoices; ui.inputs.disabled = value; ui.reconnect.disabled = value; updateConvert(); }
 function showJob(id) {
-  activeJob = id; setBusy(true); saveActiveJob(id); ui.job.hidden = false; ui.download.hidden = true; ui['new-film'].hidden = true; ui.resume.hidden = true;
+  pendingSubmission = null;
+  activeJob = id; setBusy(true);
+  if (hostedJob) {
+    try { persistHostedJob(sessionStorage, id); savePending(null); }
+    catch { /* Known job remains usable in memory; retained pending checkpoint blocks reload. */ }
+  } else saveActiveJob(id); ui.job.hidden = false; ui.download.hidden = true; ui['new-film'].hidden = true; ui.resume.hidden = true;
   ui['job-title'].textContent = 'Preparing your film'; ui['job-message'].textContent = 'Waiting for the renderer…'; ui.progress.removeAttribute('value');
 }
 function failedJob(message) {
@@ -95,25 +167,41 @@ function failedJob(message) {
 async function pollJob() {
   if (!activeJob) return;
   const id = activeJob;
+  eligibleResumeAttempt=null; ui['resume-film'].hidden=true;
   pollController = new AbortController();
   ui.resume.hidden = true;
   try {
     const response = await timedFetch(`/api/jobs/${id}`, {cache: 'no-store', signal: pollController.signal});
+    if (response.status === 404 && hostedJob) throw new Error('This private film could not be found for your session. Ask the administrator to check it; no replacement will be submitted.');
     if (response.status === 404) { failedJob('This job is no longer available. The local server may have restarted.'); return; }
     if (!response.ok) throw new Error('The local renderer is not responding.');
     const job = await response.json();
     if (activeJob !== id) return;
+    if (resumeResolved(resumePending, job)) {
+      try { sessionStorage.removeItem('byron-worker-resume'); } catch { /* A stale marker stays safely blocked after reload. */ }
+      resumePending = null;
+    }
+    eligibleResumeAttempt = job.status === 'HOLD' && job.can_resume === true && Number.isInteger(job.resume_attempt) && job.resume_attempt < 3 ? job.resume_attempt + 1 : null;
+    ui['resume-film'].hidden = !hostedJob || eligibleResumeAttempt === null || !!resumePending;
+    ui['resume-film'].disabled = resumeWorking;
     const progress = displayProgress(job.progress);
     ui.progress.hidden = false;
     if (progress === null) ui.progress.removeAttribute('value'); else ui.progress.value = progress;
     ui['job-message'].textContent = typeof job.message === 'string' ? job.message : 'The renderer is working on your film.';
-    if (['complete','completed','done','succeeded'].includes(job.status)) {
+    if (job.status === 'HOLD') {
+      stopPolling(); ui['job-title'].textContent = 'Submission needs review'; ui.progress.hidden = true;
+      ui['job-note'].textContent = 'This film is on hold. Ask the studio administrator to review it. Check film status only checks this same film; it never submits or pays again.';
+      if (eligibleResumeAttempt !== null && !resumePending) ui['job-note'].textContent = 'The previous worker has stopped. Resume this film continues the same saved inputs and plan; it does not repeat completed paid requests.';
+      if (resumePending) ui['job-note'].textContent = 'Resume reference: ' + resumePending.key + '. Its result needs confirmation. Check film status only; do not request another resume.';
+      ui.resume.hidden = false;
+    } else if (['complete','completed','done','succeeded'].includes(job.status) || isPrivateDraft(job)) {
       const download = safeDownloadURL(job.download_url, location.origin, id);
       if (!download) throw new Error('The renderer finished but did not provide a valid local download. Check film status again.');
-      stopPolling(); ui['job-title'].textContent = 'Your film is ready'; ui.progress.value = 100; ui.download.href = download; ui.download.hidden = false; ui['new-film'].hidden = false;
+      stopPolling(); ui['job-title'].textContent = isPrivateDraft(job) ? 'Your private DRAFT preview is ready' : 'Your film is ready'; ui.download.innerHTML = isPrivateDraft(job) ? 'Download DRAFT preview <span aria-hidden="true">↓</span>' : 'Download MP4 <span aria-hidden="true">↓</span>'; ui.download.download = isPrivateDraft(job) ? 'byron-DRAFT-' + id + '.mp4' : 'byron-film.mp4'; ui.progress.value = 100; ui.download.href = download; ui.download.hidden = false; ui['new-film'].hidden = false;
       ui['job-note'].textContent = completedFilmNote(job);
       // Keep the form locked until the operator chooses to make another film.
-      saveActiveJob(null); activeJob = null;
+      if (isPrivateDraft(job)) await refreshExactFilm(id);
+      else { saveActiveJob(null); activeJob = null; }
     } else if (['failed','error','cancelled'].includes(job.status)) failedJob(typeof job.message === 'string' ? job.message : 'The renderer reported an error.');
     else if (['queued','running','rendering','processing'].includes(job.status)) {
       ui['job-title'].textContent = job.status === 'queued' ? 'Your film is in the queue' : 'Making your film';
@@ -133,12 +221,109 @@ ui.images.addEventListener('change', () => {
   if (problem) { showError(problem); return; }
   paintings.push(...files.map(file => ({file, url: URL.createObjectURL(file)}))); showPaintings(); showError();
 });
-ui.reconnect.addEventListener('click', checkRenderer);
-ui.resume.addEventListener('click', pollJob);
+ui.reconnect.addEventListener('click', () => { if (loginRequired) location.assign('/auth/login'); else checkRenderer(); });
+ui.resume.addEventListener('click', async () => {
+  if (!pendingSubmission) return pollJob();
+  if (pendingSubmission.stage !== 'job' || ui.resume.disabled) return;
+  const reference = pendingSubmission.key; ui.resume.disabled = true;
+  try {
+    const {id} = await recoverSubmission(reference, (url, options) => timedFetch(url, options));
+    hostedJob = true; showJob(id); await pollJob();
+  } catch (error) {
+    ui['job-message'].textContent = error.message || 'The outcome is still unresolved. No replacement was submitted.';
+    ui['job-note'].textContent = 'Submission reference: ' + reference + '. Ask the administrator to review it. Check film status only looks up this reference; it never resubmits.';
+  } finally { ui.resume.disabled = false; }
+});
+async function refreshExactFilm(id=activeJob) {
+  if (!id || !hostedJob) return;
+  clearTimeout(exactTimer);
+  try {
+    const query=exactPending?.job_id===id ? '?reference='+encodeURIComponent(exactPending.key) : '';
+    const response=await timedFetch('/api/jobs/'+id+'/exact-film'+query,{cache:'no-store',credentials:'same-origin'});
+    if (!response.ok) { ui['exact-actions'].hidden=true; return; }
+    const status=await response.json();
+    if(activeJob!==id)return;
+    if (status.id!==id || status.enabled!==true || status.private_only!==true) throw Error('Invalid private film status.');
+    exactStatus=status;
+    if(exactActionResolved(exactPending,status)) {
+      try { sessionStorage.removeItem('byron-exact-film-action'); } catch { /* Reload remains conservatively locked. */ }
+      exactPending=null;
+    }
+    ui['exact-actions'].hidden=false;
+    ui['job-note'].textContent='Private watermarked DRAFT preview. Watch the whole film before approving this specific film for a clean copy. Nothing is published.';
+    ui['new-film'].hidden=!!exactPending || ['queued','HOLD'].includes(status.status);
+    ui['approve-film'].hidden=status.can_approve!==true || !!exactPending;
+    ui['renew-preview'].hidden=status.preview_view_available===true || !!exactPending;
+    ui['renew-clean'].hidden=!status.clean_artifact_id || status.clean_view_available===true || !!exactPending;
+    ui.download.hidden=status.preview_view_available!==true;
+    ui['clean-download'].hidden=true;
+    if(status.status==='ready' && status.clean_view_available===true && status.artifact_kind==='OWNER_APPROVED_EXACT_FILM' && status.download_url==='/api/jobs/'+id+'/approved-video') {
+      ui['clean-download'].href=status.download_url;ui['clean-download'].download='byron-THIS-FILM-'+id+'.mp4';ui['clean-download'].hidden=false;
+    }
+    ui['exact-note'].textContent=exactPending ? 'Private action reference: '+exactPending.key+'. Check status only; this action will not retry automatically.' : status.status==='ready' ? 'Your approved clean copy of THIS film is ready. The original DRAFT remains available. This does not approve future style or publish anything.' : status.status==='queued' ? 'Preparing the clean copy from this film’s retained media. No paintings, narration or motion are regenerated.' : status.status==='HOLD' ? 'The clean-copy outcome needs reconciliation. Check this same film; do not approve or generate it again.' : 'After watching the whole DRAFT, you may approve THIS film for a private clean copy. This does not approve future films or publish anything. Renew access only reopens this retained artifact; it never regenerates it.';
+    if(status.status==='queued') exactTimer=setTimeout(()=>refreshExactFilm(id),3000);
+  } catch(error) { showError(error.message || 'Private film status could not be confirmed.'); }
+}
+async function takeExactAction(action,artifactId) {
+  if(!activeJob || exactWorking || exactPending || !exactStatus || !artifactId) return;
+  exactWorking=true;
+  for(const name of ['approve-film','renew-preview','renew-clean']) ui[name].disabled=true;
+  try {
+    const response=await timedFetch('/api/creator-capabilities',{cache:'no-store',credentials:'same-origin'});
+    if(!response.ok)throw Error('Sign in again before this private film action.');
+    const capability=hostedCapability(await response.json());
+    if(!capability || !(capability.live || capability.preview))throw Error('Reconnect to the accepted private studio.');
+    await exactFilmAction({jobId:activeJob,artifactId,action,key:crypto.randomUUID(),csrf:capability.csrf},
+      (url,options)=>timedFetch(url,options,120000),value=>{persistExact(sessionStorage,value);exactPending=value;});
+    await refreshExactFilm();
+  } catch(error) {
+    showError((error.message || 'Private film action could not be confirmed.')+(exactPending ? ' Reference: '+exactPending.key+'. Check status only.' : ''));
+    await refreshExactFilm();
+  } finally {
+    exactWorking=false;
+    for(const name of ['approve-film','renew-preview','renew-clean']) ui[name].disabled=false;
+  }
+}
+ui['approve-film'].addEventListener('click',()=>takeExactAction('approve',exactStatus?.preview_id));
+ui['renew-preview'].addEventListener('click',()=>takeExactAction('renew',exactStatus?.preview_id));
+ui['renew-clean'].addEventListener('click',()=>takeExactAction('renew',exactStatus?.clean_artifact_id));
+ui['check-exact'].addEventListener('click',()=>refreshExactFilm());
+ui['resume-film'].addEventListener('click', async () => {
+  if (!activeJob || !hostedJob || resumeWorking || resumePending || eligibleResumeAttempt === null) return;
+  const id = activeJob, attempt = eligibleResumeAttempt;
+  resumeWorking = true; ui['resume-film'].disabled = true;
+  try {
+    const response = await timedFetch('/api/creator-capabilities', {cache:'no-store', credentials:'same-origin'});
+    if (!response.ok) throw new Error('Sign in again before resuming this film.');
+    const capability = hostedCapability(await response.json());
+    const key = crypto.randomUUID();
+    await resumeHosted(id, capability, key, attempt, (url, options) => timedFetch(url, options, 120000), value => {
+      persistResume(sessionStorage,value); resumePending=value; ui['resume-film'].hidden=true;
+    });
+    await pollJob();
+  } catch (error) {
+    showError((error.message || 'Resume could not be confirmed. Check this same film without resubmitting.') + (resumePending ? ' Resume reference: ' + resumePending.key + '. Check film status only.' : ''));
+    ui.resume.hidden=false;
+  } finally { resumeWorking=false; ui['resume-film'].disabled=false; }
+});
 ui.creator.addEventListener('submit', async event => {
   event.preventDefault(); if (!ready || busy) return;
   const error = validateScript(ui.script.value) || validateImages(paintings.map(item => item.file));
   if (error) { showError(error); ui.error.scrollIntoView({block:'nearest'}); return; }
+  if (hosted) {
+    let snapshot;
+    try { snapshot = freezeSubmission(ui.script.value, paintings.map(item => item.file), voiceState, crypto.randomUUID()); }
+    catch (error) { showError(error.message); return; }
+    showError(); setBusy(true); ui.convert.textContent = 'Uploading privately…';
+    try {
+      const {id} = await submitHosted(snapshot, hosted, (url, options) => timedFetch(url, options, 120000), savePending);
+      hostedJob = true; showJob(id); ui.job.scrollIntoView({block:'start'}); await pollJob();
+    } catch (error) {
+      if (error.uncertain) showUncertain(error.stage, snapshot.key, error.checkpointFailed);
+      else { savePending(null); setBusy(false); showError(error.message); }
+    } finally { if (activeJob || !ui.download.hidden || !busy) ui.convert.textContent = 'Convert to film →'; }
+    return;
+  }
   showError(); setBusy(true); ui.convert.textContent = 'Sending to local renderer…';
   const form = new FormData(); form.append('script', ui.script.value);
   for (const item of paintings) form.append('images', item.file, item.file.name);
@@ -151,7 +336,7 @@ ui.creator.addEventListener('submit', async event => {
     const data = await response.json();
     if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : 'The renderer could not accept these files. Check the script and images.');
     const id = safeJobId(data.id); if (!id) throw new Error('The renderer did not return a valid job reference. Please inspect the local server before trying again.');
-    showJob(id); ui.job.scrollIntoView({block:'start'}); await pollJob();
+    hostedJob = false; showJob(id); ui.job.scrollIntoView({block:'start'}); await pollJob();
   } catch (error) {
     if (!rejected) {
       // An interrupted POST may have been accepted. Never automatically resend it.
@@ -161,12 +346,27 @@ ui.creator.addEventListener('submit', async event => {
   } finally { if (rejected || activeJob || !ui.download.hidden) ui.convert.textContent = 'Convert to film →'; }
 });
 ui['new-film'].addEventListener('click', () => {
+  if(exactPending || exactWorking)return;
+  clearTimeout(exactTimer);exactStatus=null;ui['exact-actions'].hidden=true;
   stopPolling(); activeJob = null; saveActiveJob(null); setBusy(false); ui.job.hidden = true; ui.download.removeAttribute('href'); showError(); ui.script.focus(); checkRenderer();
 });
-window.addEventListener('pagehide', stopPolling);
+window.addEventListener('pagehide', () => {stopPolling();clearTimeout(exactTimer);});
 window.addEventListener('pageshow', event => { if (event.persisted && activeJob) pollJob(); });
 updateCount();
 let restored = null;
-try { restored = safeJobId(sessionStorage.getItem('byron-active-job')); } catch { /* Optional recovery only. */ }
-if (restored) { showJob(restored); ui['job-note'].textContent = 'Reconnecting to your previous local job. Your script and files are not saved in browser storage.'; pollJob(); }
+let pending = null;
+try { const value=JSON.parse(sessionStorage.getItem('byron-exact-film-action')); if(value) exactPending=exactCheckpoint(value); } catch { /* Invalid data cannot authorize a request. */ }
+try {
+  const value=JSON.parse(sessionStorage.getItem('byron-worker-resume'));
+  if(value) resumePending=resumeCheckpoint(value.job_id,value.key,value.attempt);
+} catch { /* Malformed recovery data cannot authorize a POST. */ }
+try {
+  const value = JSON.parse(sessionStorage.getItem('byron-pending-submission'));
+  if (value && /^[A-Za-z0-9_-]{16,128}$/.test(value.key) && ['upload','job'].includes(value.stage)) pending = value;
+} catch { /* Optional recovery only. */ }
+try { restored = safeJobId(sessionStorage.getItem('byron-active-job')); hostedJob = sessionStorage.getItem('byron-active-job-mode') === 'hosted'; } catch { /* Optional recovery only. */ }
+if(exactPending && !restored) { restored=exactPending.job_id;hostedJob=true; }
+if (resumePending && !restored) { restored=resumePending.job_id; hostedJob=true; }
+if (pending) showUncertain(pending.stage, pending.key);
+else if (restored) { showJob(restored); ui['job-note'].textContent = 'Reconnecting to your previous film. Your script and files are not saved in browser storage.'; pollJob(); }
 else checkRenderer();

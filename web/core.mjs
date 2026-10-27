@@ -4,6 +4,27 @@ export const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 export const MAX_IMAGES = 5;
 export const MIN_IMAGES = 4;
 
+// Pure state transition: a failed refresh keeps the prior catalog and selection.
+export function refreshVoiceState(previous, payload) {
+  if (!payload || !Array.isArray(payload.voices)) return {...previous, error: true};
+  const voices = payload.voices.map(v => {
+    if (!v || !/^[A-Za-z0-9_-]{8,80}$/.test(v.id) || typeof v.name !== 'string' || !v.name.trim()) throw new Error('Invalid voice catalog');
+    return {id: v.id, name: v.name};
+  });
+  const selectedId = previous.selectedId || payload.default_voice_id || '';
+  return {voices, selectedId, error: false, removed: !!selectedId && !voices.some(v => v.id === selectedId)};
+}
+
+export function voiceLabel(voice, voices) {
+  return voices.filter(v => v.name === voice.name).length > 1 ? `${voice.name} (${voice.id})` : voice.name;
+}
+
+export function snapshotVoice(state) {
+  const voice = state.voices.find(v => v.id === state.selectedId);
+  if (!voice || state.removed) throw new Error('Choose an available saved voice.');
+  return Object.freeze({...voice});
+}
+
 export function countWords(text) {
   return text.trim() ? text.trim().split(/\s+/u).length : 0;
 }
@@ -56,7 +77,13 @@ export function formatDuration(seconds) {
   return `${Math.floor(rounded / 60)}:${String(rounded % 60).padStart(2, '0')}`;
 }
 
+export function isPrivateDraft(job) {
+  return job.status === 'draft_preview_ready' && job.artifact_kind === 'PRIVATE_DRAFT_PREVIEW' && job.draft === true;
+}
+
 export function completedFilmNote(job) {
+  if (isPrivateDraft(job)) return [formatDuration(job.duration_seconds) ? `Duration ${formatDuration(job.duration_seconds)}.` : '',
+    'Private watermarked DRAFT preview. Watch the whole film to assess its style and content. It is not approved for publication; no approval or publishing action is available here.'].filter(Boolean).join(' ');
   const duration = formatDuration(job.duration_seconds);
   const advisory = typeof job.duration_advisory === 'string' ? job.duration_advisory.slice(0, 500) : '';
   return [duration ? `Duration ${duration}.` : '', advisory,

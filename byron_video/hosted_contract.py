@@ -15,7 +15,7 @@ def freeze_job(raw_script, ordered_images, narration_profile, visual_style_sha25
     for index, item in enumerate(ordered_images, 1):
         if not isinstance(item, dict) or set(item) != {'id', 'position', 'sha256'}:
             raise ValueError('Each image needs an ID, selected position and original-byte fingerprint.')
-        if not isinstance(item['id'], str) or not item['id'] or len(item['id']) > 80 or item['id'] in seen:
+        if not isinstance(item['id'], str) or not item['id'] or len(item['id']) > 128 or item['id'] in seen:
             raise ValueError('Unique image IDs required.')
         if type(item['position']) is not int or item['position'] != index:
             raise ValueError('Image order changed; use the explicitly numbered browser order.')

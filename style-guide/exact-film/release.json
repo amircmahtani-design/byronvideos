@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "scope": "OWNER_APPROVED_EXACT_FILM",
+  "future_style_approval": false,
+  "automatic_publication": false,
+  "neutral_compositor_sha256": "02a1c0d7d43eaadfa1e2f436ae8dec9490b5f21440dfcd15b263345144757709",
+  "preview_validator_sha256": "0e4bc9b73ed1b35f28b1b2861887dfa634cd83fc6c1f0a223757b60ad88a9d09",
+  "exact_compositor_sha256": "6fda785abfb04b83140b7fe2683a257b3e51ecf23b0c18a6b2dea08776992eb1",
+  "equivalence": {
+    "method": "all-frame-retained-film-v1",
+    "crop_top": 168,
+    "width": 270,
+    "height": 438,
+    "max_frame_mean_error": 3.0,
+    "max_tile_mean_error": 8.0,
+    "max_changed_pixel_fraction": 0.02,
+    "changed_pixel_threshold": 32,
+    "decoded_audio_exact": true
+  }
+}
