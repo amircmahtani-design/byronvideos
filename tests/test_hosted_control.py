@@ -343,7 +343,14 @@ def test_verified_completion_and_download_boundary_with_explicit_mock_verifier(s
         assert status["status"] == "complete" and status["progress"] == 100
         download = client.get(status["download_url"], headers=headers())
         assert download.status_code == 200 and download.content == data
-        assert download.headers["cache-control"] == "no-store"
+        # Middleware and the private download response may both emit no-store.
+        # HTTP combines these field values; directive order/duplication is not
+        # a privacy failure, but loss of either protection is.
+        cache_directives = {
+            value.strip().lower()
+            for value in download.headers["cache-control"].split(",")
+        }
+        assert cache_directives == {"private", "no-store"}
         assert len(verifier_calls) == 2 and reader_calls == [OWNER]
         assert client.get(status["download_url"], headers=headers(OTHER)).status_code == 404
         assert len(verifier_calls) == 2 and reader_calls == [OWNER]

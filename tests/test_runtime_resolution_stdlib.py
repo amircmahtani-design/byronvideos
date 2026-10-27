@@ -75,6 +75,21 @@ class RuntimeResolutionChecks(unittest.TestCase):
             self.assertNotIn(secret,text)
         self.assertLessEqual(len(r.dependency_failure_text(b'a'*100000)),16384)
 
+    def test_isolated_apt_state_preserves_status_and_signature_policy(self):
+        with tempfile.TemporaryDirectory() as temp:
+            out=Path(temp);debs=out/'debs';debs.mkdir()
+            config=r.isolated_apt_config(out,debs);text=config.read_text()
+            self.assertIn('Dir::State::status "/var/lib/dpkg/status";',text)
+            self.assertIn(f'Dir::State::lists "{config.parent}/lists";',text)
+            self.assertIn(f'Dir::Cache::archives "{debs}";',text)
+            self.assertEqual([line for line in text.splitlines() if line.startswith('#clear')],
+                             ['#clear APT::Update::Post-Invoke;'])
+            for forbidden in ('AllowUnauthenticated','AllowInsecure','Trusted','Signed-By','Dir::Etc','DPkg::Post'):
+                self.assertNotIn(forbidden,text)
+            for path in (config.parent/'lists/partial',config.parent/'lists/auxfiles',config.parent/'cache',debs/'partial'):
+                self.assertTrue(path.is_dir());self.assertEqual(path.stat().st_uid,os.getuid())
+            with self.assertRaises(FileExistsError):r.isolated_apt_config(out,debs)
+
     def test_no_ci_opt_in_performs_no_subprocess_or_network(self):
         with patch.dict(os.environ,{'GITHUB_ACTIONS':'false'}),patch.object(r,'command',side_effect=AssertionError('command forbidden')):
             with self.assertRaises(ValueError):r.main(['--base-image','python@sha256:'+'a'*64,'--python-version','3.12.14','--input','none','--output','none'])

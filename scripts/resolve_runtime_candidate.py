@@ -4,7 +4,7 @@
 Downloads public dependency materials, writes candidate locks/SBOM, installs
 nothing. Requires explicit CI opt-in. No provider/project/config inputs accepted.
 """
-import argparse,hashlib,json,os,platform,re,subprocess,sys,urllib.request,urllib.parse,zipfile
+import argparse,hashlib,json,os,platform,re,shutil,subprocess,sys,urllib.request,urllib.parse,zipfile
 from email.parser import BytesParser
 from pathlib import Path
 try:from runtime_packaging import REQUIRED,normalized,verify_materials
@@ -113,6 +113,25 @@ def validate_apt_sources(root=Path('/etc/apt')):
                     and not parsed.username and not parsed.password,'APT repository is not official Debian.')
     return True
 
+def isolated_apt_config(out, debs):
+    """Root-owned disposable indexes/cache; preserve installed status and trust."""
+    out=Path(out).resolve();debs=Path(debs).resolve()
+    need(debs==out/'debs' and re.fullmatch(r'/[A-Za-z0-9/_.-]+',str(out)),
+         'APT workspace must be the explicit safe output directory.')
+    workspace=out/'apt-workspace';workspace.mkdir(mode=0o755)
+    for directory in (workspace/'lists',workspace/'lists/partial',workspace/'lists/auxfiles',
+                      workspace/'cache',debs/'partial'):
+        directory.mkdir(mode=0o755)
+    config=workspace/'isolated.conf'
+    config.write_text(
+        '#clear APT::Update::Post-Invoke;\n'
+        'Dir::State::status "/var/lib/dpkg/status";\n'
+        f'Dir::State::lists "{workspace}/lists";\n'
+        f'Dir::Cache "{workspace}/cache";\n'
+        f'Dir::Cache::archives "{debs}";\n'
+        'Dir::Cache::pkgcache "";\nDir::Cache::srcpkgcache "";\n')
+    return config
+
 def main(argv=None):
     p=argparse.ArgumentParser(description=__doc__);p.add_argument('--resolve-public-dependencies',action='store_true')
     p.add_argument('--base-image',required=True);p.add_argument('--python-version',required=True);p.add_argument('--input',required=True,type=Path);p.add_argument('--output',required=True,type=Path)
@@ -132,10 +151,12 @@ def main(argv=None):
     rows=validate_report(json.loads(report_path.read_text()));records=[download_wheel(row,wheels) for row in rows]
     # apt authenticates repository indexes/archive hashes with the existing Debian
     # archive keyring. Never allow insecure repos, unauthenticated packages/removals.
-    command(['apt-get','-o','APT::Sandbox::User=root','-o','Acquire::Retries=0','update'])
-    policy=command(['apt-cache','policy','ffmpeg','ca-certificates']);(out/'apt-policy.txt').write_text(policy)
-    command(['apt-get','-o','APT::Sandbox::User=root','-o','Acquire::Retries=0','-o','APT::Get::AllowUnauthenticated=false','-o','Acquire::AllowInsecureRepositories=false',
+    apt_config=isolated_apt_config(out,debs)
+    command(['apt-get','-c',str(apt_config),'-o','APT::Sandbox::User=root','-o','Acquire::Retries=0','update'])
+    policy=command(['apt-cache','-c',str(apt_config),'policy','ffmpeg','ca-certificates']);(out/'apt-policy.txt').write_text(policy)
+    command(['apt-get','-c',str(apt_config),'-o','APT::Sandbox::User=root','-o','Acquire::Retries=0','-o','APT::Get::AllowUnauthenticated=false','-o','Acquire::AllowInsecureRepositories=false',
         '-o','Dir::Cache::archives='+str(debs),'--download-only','--reinstall','--no-remove','--no-install-recommends','-y','install','ffmpeg='+FFMPEG,'ca-certificates'])
+    shutil.rmtree(apt_config.parent)
     versions={}
     for line in command(['dpkg-query','-W','-f=${Package}\t${Version}\n']).splitlines():
         name,version=line.split('\t');versions[name]=version
