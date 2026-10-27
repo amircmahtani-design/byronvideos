@@ -3,6 +3,7 @@ import base64
 import copy
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -22,7 +23,10 @@ def profile():
 
 @pytest.fixture(scope='module')
 def tone(tmp_path_factory):
-    if not shutil.which('ffmpeg'): pytest.skip('FFmpeg unavailable: synthetic media decoding not run.')
+    if not shutil.which('ffmpeg'):
+        if os.environ.get('BYRON_REQUIRE_MEDIA_TESTS') == '1':
+            pytest.fail('FFmpeg is required by this release gate; media tests must not be skipped.')
+        pytest.skip('FFmpeg unavailable: synthetic media decoding not run.')
     root = tmp_path_factory.mktemp('synthetic-tone'); path=root/'tone.mp3'
     subprocess.run(['ffmpeg','-nostdin','-v','error','-f','lavfi','-i','sine=frequency=440:sample_rate=44100:duration=4',
                     '-c:a','libmp3lame','-b:a','128k',str(path)],check=True,capture_output=True)
