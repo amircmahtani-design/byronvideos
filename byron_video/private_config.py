@@ -10,7 +10,7 @@ import re
 
 class SecretManagerConfig:
     def __init__(self, client, *, admin_subject, resources):
-        if set(resources) != {"elevenlabs", "fal", "default_voice"}:
+        if set(resources) not in ({"elevenlabs", "fal", "default_voice"}, {"elevenlabs", "fal", "default_voice", "gemini"}):
             raise ValueError("Explicit private configuration resources required.")
         if not admin_subject or any(not re.fullmatch(r"projects/[A-Za-z0-9_-]+/secrets/[A-Za-z0-9_-]+", v) for v in resources.values()):
             raise ValueError("Invalid private configuration.")
@@ -27,7 +27,7 @@ class SecretManagerConfig:
                                                 "payload": {"data": value.encode("utf-8")}})
 
     def save_key(self, subject, provider, key):
-        if provider not in {"elevenlabs", "fal"}:
+        if provider not in {"elevenlabs", "fal", "gemini"} or provider not in self._resources:
             raise ValueError("Unknown provider.")
         self._write(subject, provider, key)
 

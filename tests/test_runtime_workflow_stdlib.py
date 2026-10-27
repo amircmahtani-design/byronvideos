@@ -32,6 +32,11 @@ class RuntimeWorkflowChecks(unittest.TestCase):
         resolver = (WORKFLOW.parents[2] / 'scripts/resolve_runtime_candidate.py').read_text()
         self.assertEqual(resolver.count("'APT::Sandbox::User=root'"), 2)
 
+    def test_candidate_branch_checks_only_run_on_pr_not_duplicate_push(self):
+        text=(WORKFLOW.parent/"checks.yml").read_text()
+        self.assertIn("  push:\n    branches: [main]\n  pull_request:",text)
+        self.assertIn("python -m pytest -q",text)
+
     def test_legacy_test_dependencies_include_signed_runtime_crypto(self):
         requirements = (WORKFLOW.parents[2] / 'requirements-test.txt').read_text().splitlines()
         self.assertIn('cryptography==50.0.2', requirements)

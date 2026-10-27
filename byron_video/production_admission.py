@@ -28,6 +28,8 @@ class ProductionAdmission:
         return self._policy_at(self.now)
     def _validate(self,policy,clock):
         policy.validate()
+        require(policy.payload.get("native_api_mode","vertex_eu")==self.config.get("native_api_mode","vertex_eu"),
+            "Signed native API mode differs from configured route.")
         infrastructure=policy.validate_infrastructure(self.config)
         require(infrastructure['requires_separate_reservation'] is False,
             'Quoted infrastructure mode needs a separate enforced reservation adapter; bounded-use consent is not a dollar cap.')

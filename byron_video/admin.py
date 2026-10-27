@@ -34,7 +34,7 @@ class VoiceInput(BaseModel):
 
 def install_admin_routes(app, *, session_resolver=None, private_store=None,
                          connection_tester=None, voice_provider=None,
-                         allowed_origin=None, activated=False):
+                         allowed_origin=None, activated=False, native_api_mode="vertex_eu"):
     """Explicit mounting only. Activation requires separate deployment approval.
 
     session_resolver must verify a real session AND the configured administrator
@@ -43,6 +43,10 @@ def install_admin_routes(app, *, session_resolver=None, private_store=None,
     private_store must scope configuration to this app and encrypt it at rest.
     Test callbacks must use only reviewed read-only endpoints, never synthesis.
     """
+    if native_api_mode not in {"vertex_eu", "gemini_developer"}:
+        raise ValueError("Explicit supported native API mode required.")
+    providers = PROVIDERS | ({"gemini"} if native_api_mode == "gemini_developer" else set())
+
     async def authorize(request, mutation=False):
         if not activated or session_resolver is None or not allowed_origin:
             raise HTTPException(503, "Administrator setup is not connected yet. Do not paste keys here.")
@@ -65,7 +69,7 @@ def install_admin_routes(app, *, session_resolver=None, private_store=None,
         return session
 
     def provider_name(provider):
-        if provider not in PROVIDERS:
+        if provider not in providers:
             raise HTTPException(404, "Provider not supported.")
 
     @app.get("/api/admin/status")
@@ -73,7 +77,7 @@ def install_admin_routes(app, *, session_resolver=None, private_store=None,
         session = await authorize(request)
         if private_store is None:
             raise HTTPException(503, "Private configuration storage is not connected yet.")
-        return {"enabled": True, "csrf_token": session.csrf_token, "render_ready": False,
+        return {"enabled": True, "csrf_token": session.csrf_token, "render_ready": False, "native_api_mode": native_api_mode,
                 "message": "Administrator connected. Saving keys does not activate film generation."}
 
     @app.post("/api/admin/keys/{provider}")

@@ -71,6 +71,7 @@ def build_worker_bindings(*,config,processing_plan,sdk_lock_bytes,acceptance,rev
     billing evidence or attached account prevents provider/client activation.
     """
     checked=validate_config(config);plan=validate_private_plan(processing_plan)
+    native_mode=checked.get('native_api_mode','vertex_eu')
     require(checked['firestore']['database']!='(default)','Packaged studio requires a dedicated named database; preserve existing default data.')
     validate_runtime(checked,sdk_lock_bytes)
     require(protocol in ('originals-v1','exact-film-v1'),'Explicit supported packaged worker protocol required.')
@@ -83,6 +84,7 @@ def build_worker_bindings(*,config,processing_plan,sdk_lock_bytes,acceptance,rev
         policy=ApprovedProductionPolicy(policy_envelope,public_key=policy_public_key,
             config_sha256=digest(checked),processing_plan_sha256=digest(plan),now=now)
         require(enabled is True,'Packaged worker remains disabled until explicitly executed.')
+        require(policy.payload.get('native_api_mode','vertex_eu')==native_mode,'Signed native API mode differs from configured route.')
         activation=WorkerActivation(checked,plan,acceptance,reviewer_public_key,policy,now=now);activation()
         from .vertex_token_preflight import validate_billing_contract
         validate_billing_contract(policy,billing_envelope,billing_public_key,now=now)
@@ -114,11 +116,6 @@ def build_worker_bindings(*,config,processing_plan,sdk_lock_bytes,acceptance,rev
         return WorkerBindings(store,journal_client,credentials.token_reader,_historical_semantics_forbidden,
             transaction_runner=transaction_runner,read_transport=read_transport,generation_factory=None,activation_check=activation,exact_film_preflight=activation.for_job)
     secret_client=sdk_factories['secrets'](credentials=credentials.credentials)
-    from .vertex_token_preflight import ConfiguredNativeProofs
-    proofs=ConfiguredNativeProofs(policy=policy,billing_envelope=billing_envelope,billing_public_key=billing_public_key,
-        token_reader=lambda job:credentials.native_token_reader(),firestore_client=journal_client,storage_client=store,
-        config=checked,activation_check=activation,enabled=True,transaction_runner=transaction_runner,
-        client_factory=http_client_factory,now=now)
     def key_reader(name):
         activation();credentials.verify_identity()
         response=secret_client.access_secret_version(request={'name':checked['secret_resources'][name]+'/versions/latest'},retry=None,timeout=15)
@@ -126,6 +123,11 @@ def build_worker_bindings(*,config,processing_plan,sdk_lock_bytes,acceptance,rev
         require(isinstance(raw,bytes) and 8<=len(raw)<=512,'Provider key is unavailable or malformed.')
         value=raw.decode('ascii');require(not any(c.isspace() for c in value),'Provider key contains whitespace.')
         return value
+    from .vertex_token_preflight import ConfiguredNativeProofs
+    proofs=ConfiguredNativeProofs(policy=policy,billing_envelope=billing_envelope,billing_public_key=billing_public_key,
+        token_reader=lambda job:credentials.native_token_reader(),firestore_client=journal_client,storage_client=store,
+        config=checked,activation_check=activation,enabled=True,transaction_runner=transaction_runner,
+        client_factory=http_client_factory,now=now,api_key_reader=(lambda job:key_reader('gemini')) if native_mode=='gemini_developer' else None)
     from .provider_execution import ElevenLabsHTTPTransport,FalQueueTransport
     from .motion_continuation import FalExtensionTransport
     from .segment_capture import MotionTransportRouter
@@ -137,10 +139,12 @@ def build_worker_bindings(*,config,processing_plan,sdk_lock_bytes,acceptance,rev
     from .review_budget import FilmReviewFunding
     from .generation_coordinator import build_generation_factory
     source=build_source_planner_factory(config=policy.payload['source_config'],quote_loader=policy.source_quote_loader(proofs),
-        token_reader=lambda job,runtime:credentials.native_token_reader(),activation_check=activation,enabled=True,now=now,client_factory=http_client_factory)
+        token_reader=lambda job,runtime:credentials.native_token_reader(),activation_check=activation,enabled=True,now=now,client_factory=http_client_factory,
+        native_api_mode=native_mode,key_reader=(lambda job,runtime:key_reader('gemini')) if native_mode=='gemini_developer' else None)
     review=build_vertex_review_factory(token_reader=credentials.native_token_reader,input_proof_loader=policy.review_input_proof_loader(proofs),
         max_input_tokens=policy.payload['review_quote']['max_input_tokens'],token_limit_contract_reference=policy.payload['review_quote']['token_limit_contract_reference'],
-        workspace=root,activation_check=activation,enabled=True,now=now,client_factory=http_client_factory)
+        workspace=root,activation_check=activation,enabled=True,now=now,client_factory=http_client_factory,
+        native_api_mode=native_mode,key_reader=(lambda:key_reader('gemini')) if native_mode=='gemini_developer' else None)
     from .private_preview import FirestorePreviewAuthorizations
     auth=FirestorePreviewAuthorizations(journal_client,project_id=project,namespace=checked['firestore']['namespace'],
         transaction_runner=transaction_runner,budget_loader=policy.preview_budget_loader,

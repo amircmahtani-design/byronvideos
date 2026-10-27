@@ -180,9 +180,12 @@ class GenerationCoordinator:
         if preview is not None:
             from .source_planning import SourcePlanningCandidate
             from .vertex_review import NativeVertexHTTP
+            from .gemini_developer import NativeDeveloperHTTP
             from .funded_review import FundedCandidateReview
-            require(type(self.source_planner) is SourcePlanningCandidate and type(self.source_planner.transport) is NativeVertexHTTP
-                    and type(self.review_loader) is FundedCandidateReview and callable(self.review_funding)
+            require(type(self.source_planner) is SourcePlanningCandidate and type(self.source_planner.transport) in (NativeVertexHTTP,NativeDeveloperHTTP)
+                    and type(self.review_loader) is FundedCandidateReview
+                    and type(self.source_planner.transport) is type(getattr(self.review_loader.transport,'http',None))
+                    and callable(self.review_funding)
                     and callable(self.preview_quote_loader),'Private preview requires concrete native planning, funded native review and exact quotes.')
         deadline=self.clock()+self.poll_timeout_seconds;observations=0
         require(fingerprint(job.snapshot)==job.snapshot_sha256,'Frozen original job changed.')

@@ -182,9 +182,22 @@ def parse_proposals(raw,*,evidence):
         human_approved=False,human_style_accepted=False,live_release=False,provider_submission_authorized=False)
 
 
+def native_adapter(config):
+    mode=config.get('native_api_mode','vertex_eu')
+    need(mode in ('vertex_eu','gemini_developer'),'Explicit native route required; no fallback.')
+    expected={'project','max_input_tokens','max_output_tokens','token_limit_contract_reference'}
+    if 'native_api_mode' in config:expected.add('native_api_mode')
+    exact(config,expected,'Exact native planning configuration required.')
+    if mode=='gemini_developer':
+        from . import gemini_developer as adapter
+        need(config['max_output_tokens']==3072,'Developer planner uses the approved fixed 3072 combined output ceiling.')
+    else:
+        from . import vertex_review as adapter
+    return adapter
+
+
 def prepare_source_request(*,job,originals,narration_report,config):
-    from .vertex_review import build_vertex_request
-    exact(config,{'project','max_input_tokens','max_output_tokens','token_limit_contract_reference'},'Exact private native source-planning configuration required.')
+    native_adapter(config)
     need(type(config['max_input_tokens']) is int and 0<config['max_input_tokens']<=1_048_576
          and type(config['max_output_tokens']) is int and 0<config['max_output_tokens']<=8192
          and isinstance(config['token_limit_contract_reference'],str) and ID.fullmatch(config['token_limit_contract_reference']),
@@ -194,7 +207,7 @@ def prepare_source_request(*,job,originals,narration_report,config):
 
 
 def _native_prepared(evidence,config):
-    from .vertex_review import build_vertex_request
+    build_vertex_request=native_adapter(config).build_vertex_request
     data=dict(schema=SCHEMA,binding_sha256=fingerprint(evidence['binding']),binding=evidence['binding'],
               exact_story_as_untrusted_data=evidence['text'])
     parts=[{'text':json.dumps(data,ensure_ascii=False,sort_keys=True,separators=(',',':'))}]
@@ -220,11 +233,13 @@ def planning_once(*,prepared,quote,input_proof,trusted_budget,journal,response_s
     call contract. Raw native response bytes are archived and reread before use.
     Every result is still REVIEW_REQUIRED, regardless of model confidence.
     """
-    from .vertex_review import validate_input_proof,parse_vertex_response,encoded
+    from .vertex_review import encoded
     from .review_budget import call_ceiling_cents
     need(enabled is True and callable(activation_check) and activation_check() is True,'Native source planning is disabled.')
     exact(prepared,{'native','binding','evidence','config'},'Complete source-planning request required.')
     binding=prepared['binding'];native=prepared['native'];config=prepared['config'];evidence=prepared['evidence']
+    adapter=native_adapter(config);validate_input_proof=adapter.validate_input_proof
+    parse_vertex_response=adapter.parse_developer_response if config.get('native_api_mode','vertex_eu')=='gemini_developer' else adapter.parse_vertex_response
     need(binding==evidence['binding'] and binding['policy_sha256']==fingerprint(policy())
          and journal.owner_id==binding['owner_id'] and journal.job_id==binding['job_id'],'Planning scope/policy changed.')
     need(_native_prepared(evidence,config)==prepared,'Native request differs from exact source/story/schema evidence.')
@@ -338,7 +353,9 @@ class SourcePlanningCandidate:
     def verify_preview_candidate(self,result,*,job,originals,narration_report,root):
         """Read the original received operation; never call a model to verify it."""
         from .vertex_review import NativeVertexHTTP
-        need(type(self.transport) is NativeVertexHTTP,'Private preview source proposals require concrete native provenance.')
+        from .gemini_developer import NativeDeveloperHTTP
+        expected=NativeDeveloperHTTP if self.config.get('native_api_mode','vertex_eu')=='gemini_developer' else NativeVertexHTTP
+        need(type(self.transport) is expected,'Private preview source proposals require concrete selected-route native provenance.')
         journal=self.journal_factory(job);entry=journal.get(source_operation(job.owner_id,job.id))
         need(entry is not None and entry['state']=='received','No authoritative received source-planning operation; preview cannot advance.')
         actual=self(job=job,originals=originals,narration_report=narration_report,root=root)
@@ -390,8 +407,10 @@ def validate_candidate_result(result,*,job,narration_report):
     native=result['native_provenance'];exact(native,{'native_response_id','storage_id_kind','model_version','usage_metadata',
         'native_response_sha256','semantic_payload_sha256','synthetic_storage_id'},'Native planner provenance missing.')
     from .vertex_review import MODEL,ID_PREFIX
+    from .gemini_developer import ID_PREFIX as DEVELOPER_PREFIX
+    expected_ids={ID_PREFIX+sha(('vertex-response-id\0'+native['native_response_id']).encode()),DEVELOPER_PREFIX+sha(('gemini-developer-response-id\0'+native['native_response_id']).encode())}
     need(native['storage_id_kind']=='synthetic_sha256_of_native_response_id'
-         and native['synthetic_storage_id']==ID_PREFIX+sha(('vertex-response-id\0'+native['native_response_id']).encode())
+         and native['synthetic_storage_id'] in expected_ids
          and isinstance(native['model_version'],str) and re.fullmatch(re.escape(MODEL)+r'(?:-[0-9]{3})?',native['model_version'])
          and all(isinstance(native[k],str) and SHA.fullmatch(native[k]) for k in ('native_response_sha256','semantic_payload_sha256')),
          'Native planner identity/model provenance changed.')
@@ -402,7 +421,7 @@ def validate_prepared(prepared):
     exact(prepared,{'native','binding','evidence','config'},'Complete native planning preparation required.')
     evidence=prepared['evidence'];binding=prepared['binding'];config=prepared['config']
     exact(evidence,{'binding','text','sources'},'Unexpected planning evidence fields.')
-    exact(config,{'project','max_input_tokens','max_output_tokens','token_limit_contract_reference'},'Unexpected planning configuration fields.')
+    native_adapter(config)
     need(binding==evidence['binding'] and binding['policy_sha256']==fingerprint(policy())
          and isinstance(evidence['text'],str) and 0<len(evidence['text'])<=60000
          and sha(evidence['text'].encode())==binding['narrated_text_sha256'],'Exact story/policy evidence changed.')
@@ -425,7 +444,7 @@ def validate_prepared(prepared):
     return copy.deepcopy(prepared)
 
 
-def build_source_planner_factory(*,config,quote_loader,token_reader,activation_check,enabled=False,now=time.time,client_factory=None):
+def build_source_planner_factory(*,config,quote_loader,token_reader,activation_check,enabled=False,now=time.time,client_factory=None,native_api_mode='vertex_eu',key_reader=None):
     """Explicit per-job native Vertex + private cloud archive assembly.
 
     token_reader(job,runtime) supplies a short-lived WorkloadToken; no credential
@@ -450,7 +469,14 @@ def build_source_planner_factory(*,config,quote_loader,token_reader,activation_c
             need(value['quote']['operation_cap_cents']<=budget['operation_cap_cents'],
                  'Source-planning quote exceeds independently configured operation cap.')
             return value
-        transport=NativeVertexHTTP(project=config['project'],token_reader=lambda:token_reader(job,runtime),
+        need(native_api_mode==config.get('native_api_mode','vertex_eu')==runtime.config.get('native_api_mode','vertex_eu'),'Planner native route differs from approved runtime.')
+        native_adapter(config)
+        if native_api_mode=='gemini_developer':
+            from .gemini_developer import NativeDeveloperHTTP
+            need(callable(key_reader),'Explicit Developer key reader required.')
+            cls=NativeDeveloperHTTP;auth={'key_reader':lambda:key_reader(job,runtime)}
+        else:cls=NativeVertexHTTP;auth={'token_reader':lambda:token_reader(job,runtime)}
+        transport=cls(project=config['project'],**auth,
             activation_check=activation_check,max_input_tokens=config['max_input_tokens'],max_output_tokens=config['max_output_tokens'],
             token_limit_contract_reference=config['token_limit_contract_reference'],enabled=True,client_factory=client_factory,now=now)
         return SourcePlanningCandidate(journal_factory=lambda j:journal,

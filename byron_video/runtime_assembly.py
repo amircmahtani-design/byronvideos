@@ -234,7 +234,9 @@ def assemble_runtime(*, config, processing_plan, firestore_client, storage_clien
         return (preview_reader if job.state==PREVIEW_STATE else final_reader)(owner,job,proof)
     artifact_writer = CloudArtifactWriter(storage_client, bucket=target['bucket'])
     owners = ['google_' + hashlib.sha256(('accounts.google.com\0' + subject).encode()).hexdigest() for subject in auth['admin_subjects']]
-    secrets = _AdminSecrets(secret_client, owners, {k:config['secret_resources'][k] for k in ('elevenlabs','fal','default_voice')})
+    native_mode = config.get('native_api_mode', 'vertex_eu')
+    secret_names = ('elevenlabs','fal','default_voice') + (('gemini',) if native_mode == 'gemini_developer' else ())
+    secrets = _AdminSecrets(secret_client, owners, {k:config['secret_resources'][k] for k in secret_names})
     voices = ElevenLabsVoiceReader(lambda: secrets.read_for_server('elevenlabs'))
     read = CloudRunReadTransport(workload_token_reader, enabled=enabled)
     readback = CloudRunReadback(target=target, read=read, expected_task_template_sha256=runtime['cloud_run_task_template_sha256'],
@@ -287,7 +289,7 @@ def assemble_runtime(*, config, processing_plan, firestore_client, storage_clien
         binding.check()
         return identity.admin_session(request)
     install_admin_routes(app, session_resolver=admin_session, private_store=secrets,
-        connection_tester=test_connection, voice_provider=voices, allowed_origin=auth['origin'], activated=enabled)
+        connection_tester=test_connection, voice_provider=voices, allowed_origin=auth['origin'], activated=enabled, native_api_mode=native_mode)
     def admin_creator_session(request):
         session = admin_session(request)
         return CreatorSession(Principal(session.subject), session.csrf_token)

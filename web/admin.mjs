@@ -4,6 +4,13 @@ const result = document.getElementById('admin-result');
 let csrf = null;
 let working = false;
 let loginRequired = false;
+let developerMode = false;
+function setDeveloperMode(enabled) {
+  developerMode = enabled === true;
+  document.getElementById("gemini-section").hidden = !developerMode;
+  const input = document.getElementById("gemini-key");
+  input.disabled = !developerMode; input.value = "";
+}
 async function request(path, options = {}) {
   const response = await fetch(path, {...options, credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(15000)});
   if (response.status === 403 && path === '/api/admin/status') loginRequired = true;
@@ -12,10 +19,12 @@ async function request(path, options = {}) {
 }
 async function check() {
   if (working) return;
-  fields.disabled = true; csrf = null; loginRequired = false; document.getElementById('admin-recheck').textContent = 'Check connection';
+  fields.disabled = true; csrf = null; loginRequired = false; setDeveloperMode(false); document.getElementById('admin-recheck').textContent = 'Check connection';
   try {
     const data = await request('/api/admin/status');
     if (data.enabled !== true || typeof data.csrf_token !== 'string' || data.csrf_token.length < 32) throw new Error();
+    if (!["vertex_eu", "gemini_developer"].includes(data.native_api_mode ?? "vertex_eu")) throw new Error();
+    setDeveloperMode(data.native_api_mode === "gemini_developer");
     csrf = data.csrf_token; fields.disabled = false;
     status.textContent = 'Administrator connected. Film generation is not activated.';
   } catch {
@@ -40,11 +49,17 @@ for (const provider of ['elevenlabs','fal']) {
     submit(`/api/admin/keys/${provider}`, {key:input.value.trim()}, input, 'Key saved privately. Use Test saved connection to verify it.');
   });
 }
+document.getElementById('gemini-form').addEventListener('submit', event => {
+  event.preventDefault();
+  if (!developerMode) return;
+  const input = document.getElementById('gemini-key');
+  submit('/api/admin/keys/gemini', {key:input.value.trim()}, input, 'Gemini Developer API key saved privately. No connection or paid request was made.');
+});
 document.getElementById('default-voice-form').addEventListener('submit', event => {
   event.preventDefault(); const input = document.getElementById('default-voice');
   submit('/api/admin/default-voice', {voice_id:input.value.trim()}, input, 'Accessible voice checked and saved as the default for new films.');
 });
 for (const button of document.querySelectorAll('[data-test]')) button.addEventListener('click', () => submit(`/api/admin/test/${button.dataset.test}`, null, null, 'Read-only connection test passed. No media was generated.'));
 document.getElementById('admin-recheck').addEventListener('click', () => { if (loginRequired) location.assign('/auth/login'); else check(); });
-window.addEventListener('pagehide', () => { csrf = null; for (const input of document.querySelectorAll('input')) input.value = ''; fields.disabled = true; });
+window.addEventListener('pagehide', () => { csrf = null; setDeveloperMode(false); for (const input of document.querySelectorAll('input')) input.value = ''; fields.disabled = true; });
 check();

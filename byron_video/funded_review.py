@@ -47,6 +47,12 @@ class PrivateReviewEvidence:
             return sample_evidence(source_bytes=source,source_sha256=image['sha256'],clip_path=clip,clip_sha256=ref['sha256'],presentation_crop=candidate['presentation_crop'])
 
 
+def _native_pair(transport,responses):
+    from .vertex_review import VertexReviewTransport,VertexVerifiedReviewResponseStore
+    from .gemini_developer import DeveloperReviewTransport,DeveloperVerifiedReviewResponseStore
+    return (type(transport),type(responses)) in ((VertexReviewTransport,VertexVerifiedReviewResponseStore),(DeveloperReviewTransport,DeveloperVerifiedReviewResponseStore))
+
+
 class FundedCandidateReview:
     """Fresh native caller with explicit funds; every result remains REVIEW_REQUIRED.
 
@@ -66,7 +72,7 @@ class FundedCandidateReview:
         need(fingerprint(job.snapshot)==job.snapshot_sha256,'Frozen job changed before review funding.')
         if plan.get('preview_schema'):
             from .vertex_review import VertexReviewTransport,VertexVerifiedReviewResponseStore
-            need(type(self.transport) is VertexReviewTransport and type(self.responses) is VertexVerifiedReviewResponseStore
+            need(_native_pair(self.transport,self.responses)
                  and self.responses.evidence is self.transport.evidence,'Private preview requires concrete native evidence replay, not a supplied clean-result callable.')
         identity=(job.owner_id,job.id,job.snapshot_sha256,fingerprint(plan),funding['review_plan_sha256'])
         if self.binding is not None:need(self.binding==identity,'Review service cannot switch immutable owner/job/plan.')
@@ -110,7 +116,7 @@ class FundedCandidateReview:
         self._active()
         from .private_preview import verify_preview_review
         from .vertex_review import VertexReviewTransport,VertexVerifiedReviewResponseStore
-        need(type(self.transport) is VertexReviewTransport and type(self.responses) is VertexVerifiedReviewResponseStore
+        need(_native_pair(self.transport,self.responses)
              and self.responses.evidence is self.transport.evidence,'Authoritative native archive is mandatory for advancing a private preview.')
         if self.binding is not None:
             return verify_preview_review(result,funding=self.funding,response_store=self.responses)
@@ -119,7 +125,7 @@ class FundedCandidateReview:
 
 
 def build_vertex_review_factory(*,token_reader,input_proof_loader,max_input_tokens,token_limit_contract_reference,
-                                workspace,activation_check,enabled=False,now=None,client_factory=None):
+                                workspace,activation_check,enabled=False,now=None,client_factory=None,native_api_mode='vertex_eu',key_reader=None):
     """Per-job production construction using supplied authenticated SDK clients.
 
     No ADC discovery, network operation, directory creation or provider request
@@ -137,13 +143,18 @@ def build_vertex_review_factory(*,token_reader,input_proof_loader,max_input_toke
         from .vertex_review import (FirestoreVertexAuditRecords,VertexNativeEvidence,VertexVerifiedReviewResponseStore,VertexReviewTransport)
         need(journal.owner_id==job.owner_id and journal.job_id==job.id,'Native review factory journal differs from exact owner/job.')
         config=runtime.config;bindings=runtime.bindings;project=config['target']['project_id'];bucket=config['target']['bucket']
+        need(native_api_mode in ('vertex_eu','gemini_developer') and native_api_mode==config.get('native_api_mode','vertex_eu'),'Review route differs from explicit runtime.')
+        auth={'token_reader':token_reader}
+        if native_api_mode=='gemini_developer':
+            from .gemini_developer import FirestoreDeveloperAuditRecords as FirestoreVertexAuditRecords,DeveloperNativeEvidence as VertexNativeEvidence,DeveloperVerifiedReviewResponseStore as VertexVerifiedReviewResponseStore,DeveloperReviewTransport as VertexReviewTransport
+            need(callable(key_reader),'Explicit Developer key reader required.');auth={'key_reader':key_reader}
         owner=Principal(job.owner_id)
         archive=CloudProviderResponseStore(bindings.storage_client,bucket=bucket,owner=owner,job_id=job.id)
         records=FirestoreVertexAuditRecords(bindings.firestore_client,project_id=project,namespace=config['firestore']['namespace'],
             owner_id=job.owner_id,job_id=job.id,transaction_runner=bindings.transaction_runner)
         native_evidence=VertexNativeEvidence(archive=archive,records=records,project=project)
         responses=VertexVerifiedReviewResponseStore(archive,native_evidence)
-        transport=VertexReviewTransport(project=project,token_reader=token_reader,
+        transport=VertexReviewTransport(project=project,**auth,
             input_proof_loader=lambda logical,native:input_proof_loader(job,logical,native),max_input_tokens=max_input_tokens,
             token_limit_contract_reference=token_limit_contract_reference,native_evidence=native_evidence,
             activation_check=activation_check,enabled=True,now=now,client_factory=client_factory)

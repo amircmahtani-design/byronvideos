@@ -15,7 +15,10 @@ def need(value,message):
 
 
 def validate_config(value):
-    need(isinstance(value,dict) and set(value)=={'schema_version','status','target','firestore','identity','secret_resources','budget','narration_profile','runtime'},'Use the exact private deployment configuration schema.')
+    base_keys={'schema_version','status','target','firestore','identity','secret_resources','budget','narration_profile','runtime'}
+    need(isinstance(value,dict) and set(value) in (base_keys,base_keys|{'native_api_mode'}),'Use the exact private deployment configuration schema.')
+    mode=value.get('native_api_mode','vertex_eu')
+    need(mode in ('vertex_eu','gemini_developer'),'Choose one explicit native API mode; fallback/auto routing is forbidden.')
     need(type(value['schema_version']) is int and value['schema_version']==1 and value['status']=='DRAFT_NOT_ACTIVATED','This validator cannot activate a deployment.')
     target=validate_target(value['target']);project=target['project_id']
     db=value['firestore'];need(isinstance(db,dict) and set(db)=={'database','namespace'},'Explicit database/namespace required.')
@@ -28,7 +31,9 @@ def validate_config(value):
     need(isinstance(auth['creator_subjects'],list) and bool(auth['creator_subjects']) and all(isinstance(s,str) and re.fullmatch(r'[0-9]{8,128}',s) for s in auth['creator_subjects']),'Verified Google subject allowlist required; emails are not identities.')
     need(isinstance(auth['admin_subjects'],list) and bool(auth['admin_subjects']) and set(auth['admin_subjects'])<=set(auth['creator_subjects']),'Explicit administrator subjects must be permitted creators.')
     emails=auth['subject_emails'];need(isinstance(emails,dict) and set(emails)==set(auth['creator_subjects']) and all(isinstance(v,str) and len(v)<=254 and re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+',v) for v in emails.values()),'Private verified-email mapping must match the pinned numeric subjects.')
-    refs=value['secret_resources'];need(isinstance(refs,dict) and set(refs)=={'elevenlabs','fal','default_voice','csrf','google_oauth'},'Use private secret resource references, never literal keys.')
+    refs=value['secret_resources'];secret_keys={'elevenlabs','fal','default_voice','csrf','google_oauth'}
+    need(isinstance(refs,dict) and set(refs) in (secret_keys,secret_keys|{'gemini'}),'Use private secret resource references, never literal keys.')
+    need(mode!='gemini_developer' or 'gemini' in refs,'Explicit Developer API mode requires its private Gemini secret resource.')
     need(all(isinstance(s,str) and re.fullmatch(r'projects/'+re.escape(project)+r'/secrets/[A-Za-z0-9_-]+',s) for s in refs.values()),'Secrets must reference existing resources in the configured project.')
     budget=value['budget'];need(isinstance(budget,dict) and set(budget)=={'scope','approved_total_cap_cents','prior_spend_cents','job_cap_cents','operation_cap_cents'},'Explicit total/prior/job/operation budget required.')
     need(isinstance(budget['scope'],str) and re.fullmatch(r'[A-Za-z0-9_-]{8,128}',budget['scope']),'Private shared budget scope required.')

@@ -249,3 +249,22 @@ test('view renewal is distinct from approval and recovery needs exact recorded r
   assert.equal(exactAPI.exactActionResolved(pending,{id:exactArgs.jobId,reference:exactArgs.key,action_recorded:true}),true);
   assert.equal(exactAPI.exactActionResolved(pending,{id:exactArgs.jobId,reference:'wrong',action_recorded:true}),false);
 });
+
+test('optional Gemini admin field stays hidden unless authenticated selected mode; clears on interruption', async () => {
+  const {readFile}=await import('node:fs/promises'); const {runInNewContext}=await import('node:vm');
+  const source=await readFile(new URL('./admin.mjs',import.meta.url),'utf8');
+  for(const [mode,failSave] of [['vertex_eu',false],['gemini_developer',false],['gemini_developer',true],['fallback',false]]) {
+    const elements=new Map(); const handlers={}; const calls=[];
+    const el=id=>{if(!elements.has(id))elements.set(id,{value:'',hidden:true,disabled:true,textContent:'',addEventListener:(event,fn)=>handlers[id+':'+event]=fn});return elements.get(id);};
+    const page={};
+    runInNewContext(source,{document:{getElementById:el,querySelectorAll:selector=>selector==='input'?[el('gemini-key')]:[]},window:{addEventListener:(event,fn)=>page[event]=fn},location:{assign:()=>{}},AbortSignal:{timeout:()=>undefined},fetch:async(path,options)=>{calls.push([path,options]);return {ok:!(failSave && path==='/api/admin/keys/gemini'),status:200,json:async()=>({enabled:true,csrf_token:'x'.repeat(40),native_api_mode:mode})};}});
+    await new Promise(resolve=>setImmediate(resolve));
+    assert.equal(el('gemini-section').hidden,mode!=='gemini_developer');
+    assert.equal(el('gemini-key').disabled,mode!=='gemini_developer');
+    el('gemini-key').value='synthetic-key-never-live';handlers['gemini-form:submit']({preventDefault(){}});
+    await new Promise(resolve=>setImmediate(resolve));
+    assert.equal(calls.filter(([path])=>path==='/api/admin/keys/gemini').length,mode==='gemini_developer'?1:0);
+    if(mode==='gemini_developer')assert.equal(el('gemini-key').value,'');
+    page.pagehide();assert.equal(el('gemini-key').value,'');assert.equal(el('gemini-section').hidden,true);assert.equal(el('admin-fields').disabled,true);
+  }
+});

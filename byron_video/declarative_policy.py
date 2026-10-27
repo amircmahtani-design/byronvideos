@@ -68,9 +68,17 @@ class ApprovedProductionPolicy:
     def validate(self):
         p=verify_signed(self._envelope,self.key)
         require(p==self.payload,'Signed policy mutated.')
+        mode=p.get('native_api_mode','vertex_eu')
+        require(mode in ('vertex_eu','gemini_developer'),'Unknown native mode; fallback forbidden.')
+        optional=set(p)&{'native_api_mode','native_disclosure'}
+        if mode=='gemini_developer':
+            require(optional=={'native_api_mode','native_disclosure'},'Explicit selected Developer API disclosure required.')
+            disclosure=p['native_disclosure'];exact(disclosure,{'paid_service','non_eu_exclusive_processing','abuse_retention_days','data_disclosure_authorized'},'Exact Developer API disclosure required.')
+            require(all(disclosure[k] is True for k in ('paid_service','non_eu_exclusive_processing','data_disclosure_authorized')) and type(disclosure['abuse_retention_days']) is int and disclosure['abuse_retention_days']==55,'Developer API requires explicit paid, international-processing and retention consent.')
+        else:require('native_disclosure' not in p,'Developer disclosure cannot select or authorize Vertex.')
         exact(p,{'purpose','reference','issued_at','expires_at','owner_ids','config_sha256','processing_plan_sha256','project',
             'private_preview_authorized','owner_only','public_release','human_style_accepted','preview_intent','narration_profile','allowed_voice_profiles',
-            'budget','infrastructure','token_preflight','narration_usd_per_character','all_in_usd_ceiling','image_quote','extension_quote','review_quote','source_config'},'Complete versioned production policy required.')
+            'budget','infrastructure','token_preflight','narration_usd_per_character','all_in_usd_ceiling','image_quote','extension_quote','review_quote','source_config'}|optional,'Complete versioned production policy required.')
         require(p['purpose']==PURPOSE and isinstance(p['reference'],str) and ID.fullmatch(p['reference'])
             and type(p['issued_at']) is int and type(p['expires_at']) is int and p['issued_at']<=self.now()<p['expires_at']
             and 0<p['expires_at']-p['issued_at']<=86400,'Production policy expired or unbounded.')
@@ -83,6 +91,8 @@ class ApprovedProductionPolicy:
         from .preview_composition import release_hash
         from .motion_continuation import _quote
         from .vertex_review import config
+        if mode=='gemini_developer':
+            from .gemini_developer import config
         validate_intent(p['preview_intent']);require(p['preview_intent']['preview_release_sha256']==release_hash(),'Preview renderer changed.')
         validate_profile(p['narration_profile'])
         voices=p['allowed_voice_profiles'];require(isinstance(voices,list) and 1<=len(voices)<=32 and p['narration_profile'] in voices and len({fingerprint(v) for v in voices})==len(voices),'Finite explicit approved voice profiles required.')
@@ -105,8 +115,10 @@ class ApprovedProductionPolicy:
         q=p['review_quote'];require(q['config']==config(p['project']) and q['valid_until_epoch']<=p['expires_at']
             and q['valid_until_epoch']>self.now() and q['approved'] is True and q['all_in_usd_ceiling'] is True
             and q['output_includes_thought_tokens'] is True and q['sample_count']==9 and q['source_count']==1,'Native review quote scope changed.')
-        require(q['max_output_tokens']==8192,'Native review output ceiling must match pinned 8192 transport.')
-        c=p['source_config'];exact(c,{'project','max_input_tokens','max_output_tokens','token_limit_contract_reference'},'Exact native planning configuration required.')
+        require(q['max_output_tokens']==8192,'Native review output ceiling must match selected pinned transport.')
+        c=p['source_config'];exact(c,{'project','max_input_tokens','max_output_tokens','token_limit_contract_reference'}|({'native_api_mode'} if mode=='gemini_developer' else set()),'Exact native planning configuration required.')
+        require(c.get('native_api_mode','vertex_eu')==mode,'Planner native mode differs from signed policy.')
+        if mode=='gemini_developer':require(c['max_output_tokens']==3072,'Developer planner output cap must be 3072.')
         require(c['project']==p['project'] and c['token_limit_contract_reference']==q['token_limit_contract_reference'],'Planner/review token enforcement differs.')
         planning=q['source_planning']
         require(planning['execution_enabled'] is False and all(planning[k]==c[k] for k in ('max_input_tokens','max_output_tokens')), 'Source planning accounting differs from native token ceiling.')
@@ -192,6 +204,9 @@ class ApprovedProductionPolicy:
         require(type(proofs) in (SignedNativeProofs,CountedNativeProofs,ConfiguredNativeProofs) and proofs.policy_sha256==self.sha256,'Independent native proof archive required.')
         def load(job,logical,native):
             from .vertex_review import build_native_request
-            p=self._job(job);q=p['review_quote'];require(native==build_native_request(logical,project=p['project']),'Count proof native request differs from exact logical review.')
+            p=self._job(job)
+            if p.get('native_api_mode','vertex_eu')=='gemini_developer':
+                from .gemini_developer import build_native_request
+            q=p['review_quote'];require(native==build_native_request(logical,project=p['project']),'Count proof native request differs from exact logical review.')
             return proofs.load(job,native,max_input_tokens=q['max_input_tokens'],max_output_tokens=q['max_output_tokens'],image_count=10,token_limit_contract_reference=q['token_limit_contract_reference'])
         return load

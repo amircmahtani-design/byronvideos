@@ -237,8 +237,9 @@ def validate_preview_context(context,expected_hash,*,staged,frozen,clip_receipts
 def verify_preview_review(result,*,response_store,funding=None,journal=None,trusted_budget=None):
     """Authoritative native reread for both fresh preview eligibility and workers."""
     from .vertex_review import VertexVerifiedReviewResponseStore
+    from .gemini_developer import DeveloperVerifiedReviewResponseStore
     from .automated_review import validate_request,validate_budget_context
-    need(isinstance(response_store,VertexVerifiedReviewResponseStore),'Native verified response wrapper required for preview.')
+    need(type(response_store) in (VertexVerifiedReviewResponseStore,DeveloperVerifiedReviewResponseStore),'Native verified response wrapper required for preview.')
     if funding is not None:journal=funding['journal'];trusted_budget=funding['trusted_budget']
     need(journal is not None and trusted_budget is not None,'Independently scoped review journal/budget required.')
     budget_sha=validate_budget_context(journal,trusted_budget)

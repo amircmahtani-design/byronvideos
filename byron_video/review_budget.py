@@ -256,8 +256,9 @@ class FundedReviewExecutor:
     """
     def __init__(self,*,funding,transport,response_store,activation_check,enabled=False,now=None):
         from .vertex_review import VertexReviewTransport,VertexVerifiedReviewResponseStore
-        if isinstance(transport,VertexReviewTransport):
-            need(isinstance(response_store,VertexVerifiedReviewResponseStore) and response_store.evidence is transport.evidence, 'Native Vertex review requires the same verified native evidence store on fresh output and replay.')
+        from .gemini_developer import DeveloperReviewTransport,DeveloperVerifiedReviewResponseStore
+        if type(transport) in (VertexReviewTransport,DeveloperReviewTransport):
+            need((type(transport),type(response_store)) in ((VertexReviewTransport,VertexVerifiedReviewResponseStore),(DeveloperReviewTransport,DeveloperVerifiedReviewResponseStore)) and response_store.evidence is transport.evidence, 'Native Vertex review requires the same verified native evidence store on fresh output and replay.')
         self.funding=funding;self.transport=FundedReviewTransport(funding=funding,transport=transport,now=now,activation_check=activation_check)
         self.responses=response_store;self.activation_check=activation_check;self.enabled=enabled;self.now=now
     def __call__(self,request):

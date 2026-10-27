@@ -124,15 +124,21 @@ def validate_billing_contract(policy,envelope,public_key,job=None,*,now=time.tim
     exact(c,{'purpose','reference','policy_reference','endpoint','model','billed_controls','compiler_sha256s','includes_thought_tokens','token_limit_contract_reference','evidence_sha256','evidence_url','issued_at','expires_at'},'Independent documented billing contract required.')
     from . import vertex_review,source_planning
     from pathlib import Path
-    compilers={name:hashlib.sha256(Path(module.__file__).read_bytes()).hexdigest() for name,module in (('vertex_review',vertex_review),('source_planning',source_planning))}
-    require(fingerprint(c)==t['billing_contract_sha256'] and c['purpose']=='byron-vertex-billable-output-contract-v1' and c['policy_reference']==p['reference']
-        and isinstance(c['reference'],str) and ID.fullmatch(c['reference']) and c['endpoint']==endpoint(p['project']) and c['model']==MODEL and c['compiler_sha256s']==compilers
+    mode=p.get('native_api_mode','vertex_eu')
+    native_module=vertex_review
+    expected_purpose='byron-vertex-billable-output-contract-v1'
+    if mode=='gemini_developer':
+        from . import gemini_developer
+        native_module=gemini_developer;expected_purpose='byron-gemini-developer-billable-output-contract-v1'
+    compilers={name:hashlib.sha256(Path(module.__file__).read_bytes()).hexdigest() for name,module in ((('gemini_developer' if mode=='gemini_developer' else 'vertex_review'),native_module),('source_planning',source_planning))}
+    require(fingerprint(c)==t['billing_contract_sha256'] and c['purpose']==expected_purpose and c['policy_reference']==p['reference']
+        and isinstance(c['reference'],str) and ID.fullmatch(c['reference']) and c['endpoint']==native_module.endpoint(p['project']) and c['model']==MODEL and c['compiler_sha256s']==compilers
         and c['includes_thought_tokens'] is True and c['token_limit_contract_reference']==p['source_config']['token_limit_contract_reference']
         and isinstance(c['evidence_sha256'],str) and SHA.fullmatch(c['evidence_sha256']) and isinstance(c['evidence_url'],str) and c['evidence_url'].startswith('https://')
         and type(c['issued_at']) is int and type(c['expires_at']) is int and c['issued_at']<=now()<c['expires_at']<=p['expires_at'], 'Missing independently documented exact billing contract; generation blocked.')
     expected=[]
     for output in sorted({p['source_config']['max_output_tokens'],p['review_quote']['max_output_tokens']}):
-        generation=build_vertex_request(project=p['project'],system_instruction='bound',parts=[{'text':'bound'}],response_json_schema={},max_output_tokens=output)['body']['generationConfig']
+        generation=native_module.build_vertex_request(project=p['project'],system_instruction='bound',parts=[{'text':'bound'}],response_json_schema={},max_output_tokens=output)['body']['generationConfig']
         del generation['responseSchema'];expected.append(dict(generation_controls=generation,max_billable_output_tokens=output))
     require(c['billed_controls']==expected,'Billing evidence must explicitly bound each source/review response-plus-thought ceiling, not just configure maxOutputTokens.')
     return c
@@ -153,7 +159,11 @@ class CountedNativeProofs:
     """Fresh automatic exact-input proof; output bound remains independent evidence."""
     def __init__(self,*,policy,billing_contract,public_key,records,archive,journal,transport,enabled=False,now=time.time):
         from .declarative_policy import ApprovedProductionPolicy
-        require(type(policy) is ApprovedProductionPolicy and type(records) is FirestoreCountRecords and type(transport) is VertexCountHTTP,'Concrete signed-policy/count adapters required.')
+        expected_transport=VertexCountHTTP
+        if policy.validate().get('native_api_mode','vertex_eu')=='gemini_developer':
+            from .gemini_developer import DeveloperCountHTTP
+            expected_transport=DeveloperCountHTTP
+        require(type(policy) is ApprovedProductionPolicy and type(records) is FirestoreCountRecords and type(transport) is expected_transport,'Concrete signed-policy/count adapters required.')
         self.policy,self.policy_sha256=policy,policy.sha256;self.contract=copy.deepcopy(billing_contract);self.key=public_key
         self.records,self.archive,self.journal,self.transport=records,archive,journal,transport;self.enabled,self.now=enabled is True,now
     def prevalidate(self,job):return validate_billing_contract(self.policy,self.contract,self.key,job,now=self.now)
@@ -166,17 +176,23 @@ class CountedNativeProofs:
             if isinstance(value,list):return [vertex_types(x) for x in value]
             if not isinstance(value,dict):return value
             return {key:(item.upper() if key=='type' else str(item) if key in ('minItems','maxItems') else vertex_types(item)) for key,item in value.items()}
-        if schema!=vertex_types(source_planning.response_schema()):
+        normalize=lambda value:value
+        if p.get('native_api_mode','vertex_eu')=='gemini_developer':
+            from .gemini_developer import normalize_schema as normalize
+        if schema!=normalize(vertex_types(source_planning.response_schema())):
             properties=schema.get('properties',{}).get('binding',{}).get('properties',{})
             binding={k:(v.get('minimum') if v.get('type')=='INTEGER' and v.get('minimum')==v.get('maximum') else (v.get('enum') or [None])[0]) for k,v in properties.items()}
             # Dynamic identities are accepted only under the pinned schema compiler.
-            require(schema==vertex_review.response_schema(binding),'Unreviewed native response-schema compiler output.')
+            require(schema==normalize(vertex_review.response_schema(binding)),'Unreviewed native response-schema compiler output.')
         return c
     def load(self,job,native,*,max_input_tokens,max_output_tokens,image_count,token_limit_contract_reference):
         require(self.enabled,'CountTokens proof compiler remains disabled.')
         p=self.policy._job(job);t=p['token_preflight'];c=self._contract(p,native,max_output_tokens,token_limit_contract_reference,job)
         require(t['disclosure_authorized'] is True and self.records.owner_id==self.journal.owner_id==job.owner_id and self.records.job_id==self.journal.job_id==job.id,'Count disclosure owner/job changed.')
-        request=count_request(native,p['project']);validate_native_job_scope(job,native);key=fingerprint(native);budget=self.policy.trusted_budget(job)
+        count_builder=count_request;proof_validator=validate_input_proof;count_parser=parse_count
+        if p.get('native_api_mode','vertex_eu')=='gemini_developer':
+            from .gemini_developer import count_request as count_builder,validate_input_proof as proof_validator,parse_count as count_parser
+        request=count_builder(native,p['project']);validate_native_job_scope(job,native);key=fingerprint(native);budget=self.policy.trusted_budget(job)
         from .automated_review import validate_budget_context
         validate_budget_context(self.journal,budget)
         binding=dict(owner_id=job.owner_id,job_id=job.id,snapshot_sha256=job.snapshot_sha256,policy_sha256=self.policy_sha256,native_request_sha256=key,count_request_sha256=fingerprint(request),budget_sha256=fingerprint(budget))
@@ -197,25 +213,26 @@ class CountedNativeProofs:
             require(self.archive.read_response(receipt)==wire,'Count response immutable readback failed.')
             if t['max_cost_cents']:self.journal.record(op,dict(request=request,binding=binding),receipt)
             self.records.record(key,binding,receipt)
-        count=parse_count(wire.payload);require(wire.request_id=='token_count_'+fingerprint(dict(owner_id=job.owner_id,job_id=job.id,native_request_sha256=key,response_sha256=hashlib.sha256(wire.payload).hexdigest())),'Count archive identity changed.')
+        count=count_parser(wire.payload);require(wire.request_id=='token_count_'+fingerprint(dict(owner_id=job.owner_id,job_id=job.id,native_request_sha256=key,response_sha256=hashlib.sha256(wire.payload).hexdigest())),'Count archive identity changed.')
         bounded=count['totalTokens']+t['input_margin_tokens'];require(bounded<=max_input_tokens,'Actual count plus independently approved margin exceeds funded ceiling.')
         evidence=fingerprint(dict(binding=binding,response_sha256=hashlib.sha256(wire.payload).hexdigest(),count=count,input_margin_tokens=t['input_margin_tokens'],count_bound_evidence_sha256=t['count_bound_evidence_sha256']))
         expiry=min(p['expires_at'],c['expires_at'])
         billing=dict(reference=c['reference'],evidence_sha256=c['evidence_sha256'],native_request_sha256=key,generation_config_sha256=fingerprint(native['body']['generationConfig']),model=MODEL,endpoint=native['url'],max_billable_output_tokens=max_output_tokens,includes_thought_tokens=True,token_limit_contract_reference=token_limit_contract_reference,expires_at=expiry)
         proof=dict(reference='count_proof_'+key,native_request_sha256=key,max_input_tokens=bounded,max_output_tokens=max_output_tokens,image_count=image_count,expires_at=expiry,method='reviewed_count_tokens_bound',evidence_sha256=evidence,token_limit_contract_reference=token_limit_contract_reference,billing_bound=billing)
-        return validate_input_proof(proof,native,max_input_tokens=max_input_tokens,max_output_tokens=max_output_tokens,image_count=image_count,token_limit_contract_reference=token_limit_contract_reference,now=self.now())
+        return proof_validator(proof,native,max_input_tokens=max_input_tokens,max_output_tokens=max_output_tokens,image_count=image_count,token_limit_contract_reference=token_limit_contract_reference,now=self.now())
 
 
 class ConfiguredNativeProofs:
     """Configuration-driven production loader; no arbitrary operator Python module."""
-    def __init__(self,*,policy,billing_envelope,billing_public_key,token_reader,firestore_client,storage_client,config,activation_check,enabled=False,transaction_runner=None,client_factory=None,now=time.time):
+    def __init__(self,*,policy,billing_envelope,billing_public_key,token_reader,firestore_client,storage_client,config,activation_check,enabled=False,transaction_runner=None,client_factory=None,now=time.time,api_key_reader=None):
+        self.api_key_reader=api_key_reader
         self.policy,self.policy_sha256=policy,policy.sha256;self.contract,self.key=copy.deepcopy(billing_envelope),billing_public_key
         self.token_reader,self.firestore,self.storage=token_reader,firestore_client,storage_client
         self.config,self.active,self.enabled=copy.deepcopy(config),activation_check,enabled is True
         self.tx,self.factory,self.now=transaction_runner,client_factory,now
     def prevalidate(self,job):
         p=self.policy._job(job)
-        require(p['project']==self.config['target']['project_id'] and all(p['budget'][k]==self.config['budget'][k] for k in ('scope','approved_total_cap_cents','prior_spend_cents','job_cap_cents','operation_cap_cents')),'Configured native proof campaign/project differs from signed policy.')
+        require(p.get('native_api_mode','vertex_eu')==self.config.get('native_api_mode','vertex_eu') and p['project']==self.config['target']['project_id'] and all(p['budget'][k]==self.config['budget'][k] for k in ('scope','approved_total_cap_cents','prior_spend_cents','job_cap_cents','operation_cap_cents')),'Configured native proof campaign/project differs from signed policy.')
         return validate_billing_contract(self.policy,self.contract,self.key,job,now=self.now)
     def reserve_budget(self,job):
         require(self.enabled and self.active() is True,'Count funding remains disabled.')
@@ -235,6 +252,10 @@ class ConfiguredNativeProofs:
         journal=FirestoreSpendJournal(self.firestore,**common,owner_id=job.owner_id,job_id=job.id,budget_scope=b['scope'],approved_total_cap_cents=b['approved_total_cap_cents'],prior_spend_cents=b['prior_spend_cents'])
         archive=CloudProviderResponseStore(self.storage,bucket=target['bucket'],owner=Principal(job.owner_id),job_id=job.id)
         def gate():self.prevalidate(job);require(self.active() is True,'Native count activation expired.');return True
-        transport=VertexCountHTTP(project=target['project_id'],token_reader=lambda:self.token_reader(job),activation_check=gate,enabled=True,client_factory=self.factory,now=self.now)
+        if self.config.get('native_api_mode','vertex_eu')=='gemini_developer':
+            from .gemini_developer import DeveloperCountHTTP
+            require(callable(self.api_key_reader),'Selected Developer API requires private key reader.')
+            transport=DeveloperCountHTTP(project=target['project_id'],key_reader=lambda:self.api_key_reader(job),activation_check=gate,enabled=True,client_factory=self.factory,now=self.now)
+        else:transport=VertexCountHTTP(project=target['project_id'],token_reader=lambda:self.token_reader(job),activation_check=gate,enabled=True,client_factory=self.factory,now=self.now)
         compiler=CountedNativeProofs(policy=self.policy,billing_contract=self.contract,public_key=self.key,records=records,archive=archive,journal=journal,transport=transport,enabled=True,now=self.now)
         return compiler.load(job,native,**caps)
