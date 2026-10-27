@@ -15,7 +15,28 @@ FFMPEG='7:7.1.5-0+deb13u1'
 def need(ok,message):
     if not ok:raise ValueError(message)
 def sha(raw):return hashlib.sha256(raw).hexdigest()
-def command(args,**kwargs):return subprocess.run(args,check=True,capture_output=True,timeout=1200,**kwargs).stdout.decode()
+def dependency_failure_text(raw):
+    """Bounded public tool output only; never dump arguments or environment."""
+    text=(raw.decode('utf-8','replace') if isinstance(raw,bytes) else str(raw or ''))[:16384]
+    def scrub(match):
+        try:
+            uri=urllib.parse.urlsplit(match.group(0))
+            host=uri.hostname or ''
+            return uri.scheme+'://'+host+uri.path
+        except ValueError:return '[redacted-url]'
+    text=re.sub(r'[A-Za-z][A-Za-z0-9+.-]*://[^\s<>"\']+',scrub,text)
+    return ''.join(c if c in '\n\t' or (c.isprintable() and c!='\x7f') else '?' for c in text)
+
+def command(args,**kwargs):
+    try:
+        return subprocess.run(args,check=True,capture_output=True,timeout=1200,**kwargs).stdout.decode()
+    except subprocess.CalledProcessError as error:
+        # No argv, environment, raw exception or private paths are serialized.
+        diagnostic={'exit_code':error.returncode,
+                    'stdout':dependency_failure_text(error.stdout),
+                    'stderr':dependency_failure_text(error.stderr)}
+        raise RuntimeError('Public dependency command failed: '+json.dumps(diagnostic,sort_keys=True)) from None
+
 def validate_requirements(text):
     lines=[x.strip() for x in text.splitlines() if x.strip() and not x.strip().startswith('#')]
     need(lines and all(re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]*==[0-9][A-Za-z0-9.!+_-]*',x) for x in lines),

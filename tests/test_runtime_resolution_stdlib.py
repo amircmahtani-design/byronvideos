@@ -60,6 +60,21 @@ class RuntimeResolutionChecks(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,r'source_structure=.*field_names.*\[\]'):
                 r.validate_apt_sources(root)
 
+    def test_dependency_command_failure_diagnostics_redact_urls_and_environment(self):
+        import subprocess
+        failure=subprocess.CalledProcessError(100,['apt-get','SECRETARG'],
+            output=b'Failed https://USER:PASS@deb.debian.org/debian?TOKEN=SECRET#FRAGMENT\n',
+            stderr=b'Error: signed repository unavailable\x1b\x00')
+        with patch.object(r.subprocess,'run',side_effect=failure):
+            with self.assertRaises(RuntimeError) as caught:
+                r.command(['apt-get','SECRETARG'],env={'PRIVATE_ENV':'SECRETENV'})
+        text=str(caught.exception)
+        self.assertIn('deb.debian.org/debian',text);self.assertIn('signed repository unavailable',text)
+        self.assertIn('100',text)
+        for secret in ('USER','PASS','TOKEN','SECRET','FRAGMENT','PRIVATE_ENV','\x1b','\x00'):
+            self.assertNotIn(secret,text)
+        self.assertLessEqual(len(r.dependency_failure_text(b'a'*100000)),16384)
+
     def test_no_ci_opt_in_performs_no_subprocess_or_network(self):
         with patch.dict(os.environ,{'GITHUB_ACTIONS':'false'}),patch.object(r,'command',side_effect=AssertionError('command forbidden')):
             with self.assertRaises(ValueError):r.main(['--base-image','python@sha256:'+'a'*64,'--python-version','3.12.14','--input','none','--output','none'])
