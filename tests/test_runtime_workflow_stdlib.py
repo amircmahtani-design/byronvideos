@@ -16,6 +16,26 @@ class RuntimeWorkflowChecks(unittest.TestCase):
         for forbidden in ('secrets.', 'id-token:', 'contents: write', 'docker login', 'docker push', 'gcloud ', 'google-github-actions/auth'):
             self.assertNotIn(forbidden, text)
 
+    def test_resolver_public_output_ownership_restored_even_on_failure(self):
+        text = WORKFLOW.read_text()
+        step = text.split('      - name: Resolve public PyPI wheels', 1)[1].split('      - name:', 1)[0]
+        self.assertIn('test "$RUNTIME_OUTPUT" = "$RUNNER_TEMP/byron-runtime-output"', step)
+        self.assertIn('test ! -L "$RUNTIME_OUTPUT"', step)
+        self.assertIn('runner_owner="$(id -u):$(id -g)"', step)
+        restore = "trap 'sudo chown -hR -- \"$runner_owner\" \"$RUNTIME_OUTPUT\"' EXIT"
+        self.assertIn(restore, step)
+        self.assertLess(step.index(restore), step.index('sudo chown -- 0:0'))
+        self.assertLess(step.index('sudo chown -- 0:0'), step.index('docker run'))
+        self.assertIn('--cap-drop=ALL --security-opt=no-new-privileges', step)
+        self.assertNotIn('--privileged', step)
+        self.assertNotIn('chmod 777', step)
+        resolver = (WORKFLOW.parents[2] / 'scripts/resolve_runtime_candidate.py').read_text()
+        self.assertEqual(resolver.count("'APT::Sandbox::User=root'"), 2)
+
+    def test_legacy_test_dependencies_include_signed_runtime_crypto(self):
+        requirements = (WORKFLOW.parents[2] / 'requirements-test.txt').read_text().splitlines()
+        self.assertIn('cryptography==50.0.2', requirements)
+
     def test_offline_tests_and_explicit_public_artifact_allowlist(self):
         text = WORKFLOW.read_text()
         self.assertIn('docker build --network=none --pull=false', text)

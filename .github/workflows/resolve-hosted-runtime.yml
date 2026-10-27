@@ -44,6 +44,13 @@ jobs:
           cp scripts/resolve_runtime_candidate.py byron_video/runtime_packaging.py requirements-hosted.in "$RUNNER_TEMP/byron-runtime-input/"
       - name: Resolve public PyPI wheels and signed Debian archive closure (no install)
         run: |
+          # Only this fresh public output directory changes ownership. Container
+          # root has no DAC override capability and cannot write runner-owned 0755.
+          test "$RUNTIME_OUTPUT" = "$RUNNER_TEMP/byron-runtime-output"
+          test -d "$RUNTIME_OUTPUT" && test ! -L "$RUNTIME_OUTPUT"
+          runner_owner="$(id -u):$(id -g)"
+          trap 'sudo chown -hR -- "$runner_owner" "$RUNTIME_OUTPUT"' EXIT
+          sudo chown -- 0:0 "$RUNTIME_OUTPUT"
           docker run --rm --platform linux/amd64 --cap-drop=ALL --security-opt=no-new-privileges \
             -e GITHUB_ACTIONS=true -v "$RUNNER_TEMP/byron-runtime-input:/input:ro" -v "$RUNTIME_OUTPUT:/output" \
             "$PYTHON_BASE_IMAGE" python3 /input/resolve_runtime_candidate.py --resolve-public-dependencies \
