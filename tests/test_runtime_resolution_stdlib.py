@@ -29,6 +29,18 @@ class RuntimeResolutionChecks(unittest.TestCase):
             for bad in (text.replace('deb.debian.org','evil.test'),text.replace('Signed-By:','Trusted:'),text.replace('trixie trixie-updates','unstable')):
                 source.write_text(bad)
                 with self.assertRaises(ValueError):r.validate_apt_sources(root)
+    def test_observed_official_pgp_keyring_accepted_other_keyrings_denied(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp);(root/'sources.list.d').mkdir();source=root/'sources.list.d/debian.sources'
+            template='Types: deb\nURIs: http://deb.debian.org/debian\nSuites: trixie trixie-updates\nComponents: main\nSigned-By: {}\n'
+            for extension in ('gpg','pgp'):
+                source.write_text(template.format('/usr/share/keyrings/debian-archive-keyring.'+extension))
+                self.assertTrue(r.validate_apt_sources(root))
+            for key in ('/tmp/debian-archive-keyring.pgp','/usr/share/keyrings/other.pgp',
+                        '/usr/share/keyrings/debian-archive-keyring.pgp /tmp/extra.pgp'):
+                source.write_text(template.format(key))
+                with self.assertRaises(ValueError):r.validate_apt_sources(root)
+
     def test_source_diagnostic_strips_uri_credentials_query_and_unknown_values(self):
         fields={'Types':'deb-src','URIs':'https://USERSECRET:PASSSECRET@deb.debian.org/debian?QUERYSECRET#FRAGMENTSECRET',
                 'Suites':'trixie','Components':'main','Signed-By':'/usr/share/keyrings/debian-archive-keyring.gpg',

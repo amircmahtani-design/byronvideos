@@ -81,7 +81,8 @@ def validate_apt_sources(root=Path('/etc/apt')):
                     need(':' in line and not line.startswith((' ','\t')),'Unexpected apt source syntax.')
                     key,value=line.split(':',1);need(key not in fields,'Duplicate apt source field.');fields[key]=value.strip()
             need(set(fields)<= {'Types','URIs','Suites','Components','Signed-By'} and fields.get('Types')=='deb'
-                 and fields.get('Signed-By')=='/usr/share/keyrings/debian-archive-keyring.gpg'
+                 and fields.get('Signed-By') in ('/usr/share/keyrings/debian-archive-keyring.gpg',
+                                                '/usr/share/keyrings/debian-archive-keyring.pgp')
                  and set(fields.get('Suites','').split())<= {'trixie','trixie-updates','trixie-security'}
                  and fields.get('Components')=='main','Only existing signed Debian trixie repositories accepted; source_structure='+apt_source_diagnostic(fields))
             for uri in fields['URIs'].split():
