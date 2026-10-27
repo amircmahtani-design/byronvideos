@@ -6,6 +6,12 @@ The current public UI, local server, renderer, style files and Netlify configura
 are unchanged. The live release gate is closed; there is no network transport,
 credential reader, new public endpoint, authentication change or paid request.
 
+The newer [on-demand candidate](on-demand.md) adds an inactive, default-deny control
+API factory, immutable Cloud Run handoff and synthetic private-staging tests. It
+does not mount a public endpoint or make hosted Convert ready. For low volume,
+on-demand compute plus separate durable storage/ledger is preferred to the
+always-running host baseline below; infrastructure remains unapproved.
+
 ## Implemented and testable now
 
 - `byron_video.hosted_contract.freeze_job` freezes the raw paste, visible-link
@@ -54,7 +60,7 @@ spending. The real-provider speech/chunk continuity and timing review is still r
 synthetic media joining has been tested. Flash v2.5
 is supported by this planner but is never selected as a silent fallback.
 
-## Smallest compatible hosting proposal
+## Earlier compatible always-running baseline (not the low-volume recommendation)
 
 Keep the existing Netlify site and its public branding. Run a separately approved
 Linux container with Python 3.12, pinned FFmpeg/FFprobe, Pillow and NumPy for the

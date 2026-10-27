@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "status": "DRAFT",
+  "live_release": false,
+  "project_id": null,
+  "region": null,
+  "job_name": "byron-renderer",
+  "bucket": null,
+  "container_image": null,
+  "cpu": "2",
+  "memory": "4Gi",
+  "task_timeout_seconds": 1800,
+  "task_count": 1,
+  "parallelism": 1,
+  "max_retries": 0
+}
