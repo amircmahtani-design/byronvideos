@@ -42,6 +42,19 @@ class RuntimePackagingChecks(unittest.TestCase):
             else:
                 path=self.root/'debs'/'fixture.deb';path.unlink();path.symlink_to('/dev/null')
             with self.subTest(change=change),self.assertRaises(ValueError):p.verify_materials(self.root,value)
+    def test_offline_deb_install_uses_verified_absolute_archive_cache(self):
+        root=Path(__file__).resolve().parents[1]
+        for name in ('Dockerfile.dependencies','Dockerfile.hosted-candidate'):
+            text=(root/name).read_text()
+            line=next(line for line in text.splitlines() if line.startswith('RUN ') and 'apt-get ' in line)
+            self.assertIn('RUN --network=none apt-get',line)
+            self.assertIn('-o Dir::Cache::archives=/opt/byron-runtime/debs',line)
+            self.assertIn('--no-download --no-remove --no-install-recommends',line)
+            self.assertTrue(line.endswith('install /opt/byron-runtime/debs/*.deb'))
+            self.assertLess(text.index('runtime_packaging.py materials'),text.index(line))
+            self.assertNotIn('--allow-unauthenticated',text)
+            self.assertNotIn('apt-get update',text)
+
     def test_wrong_media_runtime_cannot_silently_repin(self):
         self.manifest['packages']['pillow']='12.3.0'
         with self.assertRaises(ValueError):p.validate_manifest(self.manifest)

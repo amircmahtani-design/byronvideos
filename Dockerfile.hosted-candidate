@@ -11,7 +11,9 @@ COPY materials.json /opt/byron-runtime/materials.json
 COPY wheels /opt/byron-runtime/wheels
 COPY debs /opt/byron-runtime/debs
 RUN --network=none python3 runtime_packaging.py materials --manifest materials.json --root /opt/byron-runtime --expected-base "$PYTHON_BASE_IMAGE" --write-lock requirements.lock --write-sdk-lock sdk-lock.json
-RUN --network=none apt-get --no-download --no-remove --no-install-recommends -y install /opt/byron-runtime/debs/*.deb
+# --no-download requires archives already in APT's configured cache. Bind
+# that cache to the exact hash-verified closure, not /var/cache/apt/archives.
+RUN --network=none apt-get -o Dir::Cache::archives=/opt/byron-runtime/debs --no-download --no-remove --no-install-recommends -y install /opt/byron-runtime/debs/*.deb
 RUN --network=none python3 -m venv /opt/byron-venv
 ENV PATH="/opt/byron-venv/bin:$PATH" PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 RUN --network=none python3 -m pip install --no-index --find-links=/opt/byron-runtime/wheels --require-hashes -r /opt/byron-runtime/requirements.lock
