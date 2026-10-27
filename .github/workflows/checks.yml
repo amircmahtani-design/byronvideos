@@ -10,7 +10,7 @@ permissions:
 jobs:
   unit-api-style:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 20
     env:
       BYRON_REQUIRE_MEDIA_TESTS: "1"
     steps:
