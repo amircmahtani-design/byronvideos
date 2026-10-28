@@ -3,7 +3,8 @@ import base64
 import json
 import time
 from pathlib import Path
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import RedirectResponse
 from starlette.staticfiles import StaticFiles
 from .hosted_control import canonical, digest, require
 
@@ -69,11 +70,27 @@ def assemble_administration(*, config, processing_plan, bindings, acceptance, re
     def admin_session(request):
         check()
         return identity.admin_session(request)
-    install_admin_routes(app, session_resolver=admin_session, private_store=secrets, allowed_origin=auth['origin'],
-        activated=True, native_api_mode=mode)  # No provider callbacks, including voice lookup.
+    from .voice_library import FirestoreVoiceLibrary
+    library = FirestoreVoiceLibrary(bindings.firestore_client, project_id=target['project_id'], namespace=db['namespace'])
+    # No provider callbacks, including voice lookup: names are typed as shown in ElevenLabs.
+    install_admin_routes(app, session_resolver=admin_session, private_store=secrets, voice_library=library,
+        allowed_origin=auth['origin'], activated=True, native_api_mode=mode)
     @app.get('/api/creator-capabilities')
     def capabilities():
         return {'enabled': False, 'render_ready': False, 'administration_only': True}
+    @app.get('/api/voices')
+    def named_voices(request: Request):
+        try:
+            admin_session(request)
+        except Exception:
+            raise HTTPException(403, 'Sign in to see the saved voices.') from None
+        try:
+            return library.read()
+        except Exception:
+            raise HTTPException(503, 'Saved voices could not be loaded. Please try again.') from None
+    @app.get('/admin', include_in_schema=False)
+    def admin_page():
+        return RedirectResponse('/admin.html', status_code=308)
     # No job/upload/resume/exact-film routes or dispatcher exist in this mode.
     web_root = Path(__file__).resolve().parent.parent / 'web'
     require(not web_root.is_symlink() and (web_root / 'index.html').is_file(), 'Reviewed assets required.')

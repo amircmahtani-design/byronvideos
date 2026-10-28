@@ -40,7 +40,7 @@ async function refreshVoices() {
     voiceState = refreshVoiceState(voiceState, await response.json());
     if (voiceState.error) throw new Error();
     showVoices();
-    ui['voice-status'].textContent = localRenderer ? 'The local prototype uses its fixed narrator. Saved ElevenLabs voices are for hosted films once connected.' : voiceState.removed ? 'Your previous voice was removed. Choose another saved voice; no substitute was selected.' : voiceState.voices.length ? 'Save a designed voice in ElevenLabs, then use Refresh voices. Your choice is fixed when a film starts.' : 'No saved designed voices found. Save a voice in ElevenLabs, then refresh.';
+    ui['voice-status'].textContent = localRenderer ? 'The local prototype uses its fixed narrator. Saved ElevenLabs voices are for hosted films once connected.' : voiceState.removed ? 'Your previous voice was removed. Choose another saved voice; no substitute was selected.' : voiceState.voices.length ? 'Choose a narrator by name. Your choice is fixed when a film starts.' : 'No narrator voices saved yet. They are added on the administrator page.';
   } catch {
     voiceState = refreshVoiceState(voiceState, null);
     ui['voice-status'].textContent = voiceState.voices.length ? 'Could not refresh voices. Your previous selection is kept. Try again shortly.' : 'ElevenLabs is not connected yet. Your saved voices will appear here after setup.';

@@ -32,8 +32,12 @@ class VoiceInput(BaseModel):
     voice_id: StrictStr = Field(pattern=r"^[A-Za-z0-9_-]{8,80}$")
 
 
+class NamedVoiceInput(VoiceInput):
+    name: StrictStr | None = Field(default=None, min_length=1, max_length=120)
+
+
 def install_admin_routes(app, *, session_resolver=None, private_store=None,
-                         connection_tester=None, voice_provider=None,
+                         connection_tester=None, voice_provider=None, voice_library=None, voice_namer=None,
                          allowed_origin=None, activated=False, native_api_mode="vertex_eu"):
     """Explicit mounting only. Activation requires separate deployment approval.
 
@@ -125,3 +129,58 @@ def install_admin_routes(app, *, session_resolver=None, private_store=None,
         except Exception:
             raise HTTPException(503, "Default voice save could not be confirmed.") from None
         return {"saved": True, "render_ready": False}
+
+    # Named narrator list. With ElevenLabs connected, names come from ElevenLabs
+    # (read-only lookup by ID); in setup-only mode the owner types the same name.
+    async def library_call(method, *args, checked=False):
+        if voice_library is None:
+            raise HTTPException(503, "The voice list is not connected yet.")
+        try:
+            return {**await invoke(getattr(voice_library, method), *args), "checked_with_elevenlabs": checked}
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from None
+        except Exception:
+            raise HTTPException(503, "The voice list change could not be confirmed. Reload and check the list.") from None
+
+    async def elevenlabs_name(voice_id):
+        try:
+            name = await invoke(voice_namer, voice_id)
+            if not isinstance(name, str) or not name.strip():
+                raise ValueError()
+            return name
+        except Exception:
+            raise HTTPException(422, "ElevenLabs did not confirm this Voice ID for the connected account. Check the ID.") from None
+
+    @app.get("/api/admin/voices")
+    async def list_named_voices(request: Request):
+        await authorize(request)
+        return {**await library_call("read"), "names_from_elevenlabs": voice_namer is not None}
+
+    @app.post("/api/admin/voices")
+    async def add_named_voice(body: NamedVoiceInput, request: Request):
+        await authorize(request, True)
+        if voice_namer is not None:
+            return await library_call("add", body.voice_id, await elevenlabs_name(body.voice_id), checked=True)
+        if body.name is None:
+            raise HTTPException(422, "ElevenLabs is not connected yet, so type the voice name exactly as it appears in ElevenLabs.")
+        return await library_call("add", body.voice_id, body.name)
+
+    @app.post("/api/admin/voices/refresh-names")
+    async def refresh_named_voices(request: Request):
+        await authorize(request, True)
+        if voice_namer is None:
+            raise HTTPException(503, "Connect ElevenLabs first; names are read from ElevenLabs then.")
+        library = await library_call("read")
+        for voice in library["voices"]:
+            library = await library_call("add", voice["id"], await elevenlabs_name(voice["id"]), checked=True)
+        return library
+
+    @app.post("/api/admin/voices/remove")
+    async def remove_named_voice(body: VoiceInput, request: Request):
+        await authorize(request, True)
+        return await library_call("remove", body.voice_id)
+
+    @app.post("/api/admin/voices/default")
+    async def default_named_voice(body: VoiceInput, request: Request):
+        await authorize(request, True)
+        return await library_call("set_default", body.voice_id)

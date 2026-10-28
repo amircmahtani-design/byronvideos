@@ -18,6 +18,7 @@ from byron_video.cloud_run_readback import normalized_task
 from byron_video.hosted_control import digest
 from byron_video.runtime_assembly import assemble_runtime
 from byron_video.voices import ElevenLabsVoiceReader
+from byron_video.voice_library import FirestoreVoiceLibrary
 from byron_video.google_login import FirestoreLoginJournal
 from test_cloud_journal_stdlib import Client as FakeFirestore, Ref as FakeFirestoreRef
 from test_cloud_storage_stdlib import FakeBucket
@@ -46,6 +47,8 @@ class FreshApplicationFixture:
         token_sha=hashlib.sha256(TOKEN.encode()).hexdigest()
         FirestoreLoginJournal(self.firestore,project_id=t['project_id'],namespace=self.config['firestore']['namespace'],
             transaction_runner=self.firestore.run).rotate(self.owner,token_sha,time.time()+600)
+        FirestoreVoiceLibrary(self.firestore,project_id=t['project_id'],namespace=self.config['firestore']['namespace'],
+            transaction_runner=self.firestore.run).add(VOICE,'Chosen synthetic narrator')
         self.run_requests=[];self.read_requests=[];self.provider_requests=[]
         self.stack=ExitStack()
         def read(url):

@@ -23,7 +23,7 @@ class ElevenLabsVoiceReader:
     def __init__(self, key_reader):
         self._key_reader = key_reader
 
-    def __call__(self, _owner):
+    def _with_get(self, use):
         import httpx
         try:
             key = self._key_reader()
@@ -38,11 +38,30 @@ class ElevenLabsVoiceReader:
                             if len(payload) > 2_000_000:
                                 raise ValueError()
                         return response.status_code, json.loads(payload)
-                return list_voices(get)
+                return use(get)
         except VoiceUnavailable:
             raise
         except Exception:
             raise VoiceUnavailable("Saved voices could not be refreshed. Please try again.") from None
+
+    def __call__(self, _owner):
+        return self._with_get(list_voices)
+
+    def name_of(self, voice_id):
+        """Read-only: the voice's name exactly as written in ElevenLabs."""
+        return self._with_get(lambda get: voice_name(get, voice_id))
+
+
+def voice_name(get, voice_id):
+    if not isinstance(voice_id, str) or not VOICE_ID.fullmatch(voice_id):
+        raise VoiceUnavailable("Paste the ElevenLabs Voice ID only.")
+    status, data = get("https://api.elevenlabs.io/v1/voices/" + voice_id)
+    if status in (401, 403):
+        raise VoiceUnavailable("ElevenLabs voice access needs administrator attention.")
+    name = data.get("name") if status == 200 and isinstance(data, dict) and data.get("voice_id") == voice_id else None
+    if not isinstance(name, str) or not name.strip():
+        raise VoiceUnavailable("ElevenLabs did not confirm this Voice ID for the connected account.")
+    return name[:60]
 
 
 def list_voices(get):

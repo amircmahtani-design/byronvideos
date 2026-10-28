@@ -22,6 +22,7 @@ from .google_login import GoogleLogin, GoogleCodeExchange, FirestoreLoginJournal
 from .private_config import SecretManagerConfig
 from .preview_runtime import verify_runtime_authorization
 from .voices import ElevenLabsVoiceReader
+from .voice_library import FirestoreVoiceLibrary
 from .admin import install_admin_routes
 from .cloud_journal import FirestoreJobStore, FirestoreDispatchJournal, FirestoreArtifactRegistry
 from .cloud_storage import CloudUploadStore, CloudArtifactReader, CloudArtifactWriter
@@ -237,7 +238,10 @@ def assemble_runtime(*, config, processing_plan, firestore_client, storage_clien
     native_mode = config.get('native_api_mode', 'vertex_eu')
     secret_names = ('elevenlabs','fal','default_voice') + (('gemini',) if native_mode == 'gemini_developer' else ())
     secrets = _AdminSecrets(secret_client, owners, {k:config['secret_resources'][k] for k in secret_names})
-    voices = ElevenLabsVoiceReader(lambda: secrets.read_for_server('elevenlabs'))
+    elevenlabs = ElevenLabsVoiceReader(lambda: secrets.read_for_server('elevenlabs'))
+    # Creators choose from the owner's named list; names were read from ElevenLabs when added.
+    library = FirestoreVoiceLibrary(firestore_client, **dbargs)
+    voices = lambda owner: library.read()['voices']
     read = CloudRunReadTransport(workload_token_reader, enabled=enabled)
     readback = CloudRunReadback(target=target, read=read, expected_task_template_sha256=runtime['cloud_run_task_template_sha256'],
         expected_service_account=runtime['worker_service_account'], handoff_loader=None,
@@ -254,7 +258,7 @@ def assemble_runtime(*, config, processing_plan, firestore_client, storage_clien
         return (previews if job.state==PREVIEW_STATE else artifacts).verify(owner,job,artifact_id)
     plan_json = canonical(plan)
     plan_provider = lambda owner: json.loads(plan_json)
-    default_voice_provider = lambda owner: secrets.read_for_server('default_voice')
+    default_voice_provider = lambda owner: library.read()['default_voice_id']
     binding = AcceptedRuntimeBinding(envelope=acceptance, public_key=reviewer_public_key, config=config, plan=plan,
         dispatcher=dispatcher, store=jobs, uploads=uploads, access=access, voices=voices,
         artifact_verifier=verifier, artifact_reader=artifact_reader, handoff_loader=handoff_loader,
@@ -281,7 +285,7 @@ def assemble_runtime(*, config, processing_plan, firestore_client, storage_clien
     def test_connection(subject, provider):
         if provider != 'elevenlabs':
             raise ValueError('No reviewed read-only fal connection endpoint is configured.')
-        voices(subject)
+        elevenlabs(subject)
         return True
     def admin_session(request):
         if binding is None:
@@ -289,7 +293,8 @@ def assemble_runtime(*, config, processing_plan, firestore_client, storage_clien
         binding.check()
         return identity.admin_session(request)
     install_admin_routes(app, session_resolver=admin_session, private_store=secrets,
-        connection_tester=test_connection, voice_provider=voices, allowed_origin=auth['origin'], activated=enabled, native_api_mode=native_mode)
+        connection_tester=test_connection, voice_provider=elevenlabs, voice_library=library, voice_namer=elevenlabs.name_of,
+        allowed_origin=auth['origin'], activated=enabled, native_api_mode=native_mode)
     def admin_creator_session(request):
         session = admin_session(request)
         return CreatorSession(Principal(session.subject), session.csrf_token)
