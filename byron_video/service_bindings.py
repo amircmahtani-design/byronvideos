@@ -30,7 +30,7 @@ def _sdk_clients(config,credentials):
             secretmanager.SecretManagerServiceClient(credentials=credentials,client_options={'api_endpoint':'secretmanager.googleapis.com'}))
 
 
-def build_service_bindings(*,config,processing_plan,sdk_lock_bytes,acceptance,reviewer_public_key,enabled=False):
+def build_service_bindings(*,config,processing_plan,sdk_lock_bytes,acceptance,reviewer_public_key,enabled=False,administration_only=False):
     require(enabled is True,'Packaged service bindings are disabled; validation never accesses credentials or secrets.')
     checked=validate_config(config);plan=validate_private_plan(processing_plan)
     require(checked['firestore']['database']!='(default)','Packaged production requires a dedicated named database; preserve existing default/Firebase data.')
@@ -43,8 +43,12 @@ def build_service_bindings(*,config,processing_plan,sdk_lock_bytes,acceptance,re
     envelope_json=canonical(acceptance);public_key=bytes(reviewer_public_key)
     def activation_check():
         current_config,current_plan=json.loads(config_json),json.loads(plan_json)
-        verify_runtime_authorization(json.loads(envelope_json),public_key,digest(current_config),digest(current_plan),
-            preview_contract=current_plan.get('preview_contract'))
+        if administration_only:
+            from .administration_runtime import verify_administration
+            verify_administration(json.loads(envelope_json),public_key,digest(current_config),digest(current_plan))
+        else:
+            verify_runtime_authorization(json.loads(envelope_json),public_key,digest(current_config),digest(current_plan),
+                preview_contract=current_plan.get('preview_contract'))
         if 'exact_film_contract' in current_plan:
             from .exact_film_runtime import validate_contract
             validate_contract(current_plan['exact_film_contract'])

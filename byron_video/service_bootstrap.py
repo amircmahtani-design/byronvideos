@@ -68,6 +68,7 @@ def main(argv=None):
     parser=argparse.ArgumentParser(description='Validate or explicitly run private Byron ASGI candidate; never deploy.')
     parser.add_argument('--config',type=Path);parser.add_argument('--processing-plan',type=Path)
     parser.add_argument('--bootstrap-env');parser.add_argument('--reviewer-key-sha256')
+    parser.add_argument('--administration-only',action='store_true',help='Signed owner setup only; no generation or provider calls.')
     parser.add_argument('--sdk-lock',default=Path('/opt/byron-runtime/sdk-lock.json'),type=Path);parser.add_argument('--serve',action='store_true')
     parser.add_argument('--legacy-private-bindings',action='store_true',help='Explicit backwards-compatible reviewed private Python adapter mode; not required for packaged serving.')
     parser.add_argument('--bindings',type=Path);parser.add_argument('--bindings-sha256')
@@ -79,12 +80,16 @@ def main(argv=None):
     parser.add_argument('--trusted-proxy',action='append',default=[]);parser.add_argument('--port',type=int,default=8080)
     args=parser.parse_args(argv)
     try:
+        if args.administration_only and any((args.legacy_private_bindings,args.bindings,args.bindings_sha256,
+                args.production_policy,args.policy_public_key,args.billing_contract,args.billing_public_key,
+                args.infrastructure_authorization,args.policy_env,args.policy_key_sha256,args.billing_key_sha256)):
+            raise ValueError('Setup-only mode cannot mix generation authority or legacy adapters.')
         bundle=None
         if args.bootstrap_env:
             if any((args.config,args.processing_plan,args.acceptance,args.reviewer_public_key,args.legacy_private_bindings)):
                 raise ValueError('Explicit ENV bundle mode cannot mix private file or legacy Python configuration.')
             from .bootstrap_bundle import load_bootstrap_env
-            bundle=load_bootstrap_env(args.bootstrap_env,args.reviewer_key_sha256)
+            bundle=load_bootstrap_env(args.bootstrap_env,args.reviewer_key_sha256,administration_only=args.administration_only)
             config,plan=bundle['config'],bundle['processing_plan']
         else:
             if not all((args.config,args.processing_plan)) or args.reviewer_key_sha256:
@@ -104,9 +109,13 @@ def main(argv=None):
         key=bundle['reviewer_public_key'] if bundle else private_bytes(args.reviewer_public_key,32)
         if len(key)!=32:raise ValueError('Pinned raw Ed25519 reviewer public key required.')
         acceptance=bundle['acceptance'] if bundle else strict_json(private_bytes(args.acceptance,128_000))
-        verify_runtime_authorization(acceptance,key,digest(config),digest(plan),preview_contract=plan.get("preview_contract"))
+        if args.administration_only:
+            from .administration_runtime import verify_administration
+            verify_administration(acceptance,key,digest(config),digest(plan))
+        else:
+            verify_runtime_authorization(acceptance,key,digest(config),digest(plan),preview_contract=plan.get("preview_contract"))
         admission=None
-        if not args.legacy_private_bindings:
+        if not args.legacy_private_bindings and not args.administration_only:
             from .production_admission import ProductionAdmission
             from .production_worker import load_policy_env
             private_policy_files=(args.production_policy,args.policy_public_key,args.billing_contract,args.billing_public_key)
@@ -132,9 +141,14 @@ def main(argv=None):
         else:
             from .service_bindings import build_service_bindings
             bindings=build_service_bindings(config=config,processing_plan=plan,sdk_lock_bytes=lock,
-                acceptance=acceptance,reviewer_public_key=key,enabled=True)
-        runtime=build_service(config=config,processing_plan=plan,sdk_lock_bytes=lock,bindings=bindings,
-            acceptance=acceptance,reviewer_public_key=key,enabled=True,production_admission=admission)
+                acceptance=acceptance,reviewer_public_key=key,enabled=True,administration_only=args.administration_only)
+        if args.administration_only:
+            from .administration_runtime import assemble_administration
+            runtime=assemble_administration(config=config,processing_plan=plan,bindings=bindings,
+                acceptance=acceptance,reviewer_public_key=key)
+        else:
+            runtime=build_service(config=config,processing_plan=plan,sdk_lock_bytes=lock,bindings=bindings,
+                acceptance=acceptance,reviewer_public_key=key,enabled=True,production_admission=admission)
         import uvicorn
         uvicorn.run(runtime.app,host='0.0.0.0',port=args.port,proxy_headers=True,forwarded_allow_ips=forwarded,server_header=False)
         return 0
