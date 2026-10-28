@@ -19,7 +19,7 @@ class DeveloperAdminTests(unittest.TestCase):
             self.assertNotIn(KEY,status.text)
             self.assertEqual(client.post('/api/admin/keys/gemini',json={'key':KEY}).status_code,403)
             saved=client.post('/api/admin/keys/gemini',json={'key':KEY},headers=headers())
-            self.assertEqual(saved.json(),{'saved':True,'tested':False,'render_ready':False});self.assertNotIn(KEY,saved.text)
+            self.assertEqual(saved.json(),{'saved':True,'saved_at':None,'tested':False,'render_ready':False});self.assertNotIn(KEY,saved.text)
             self.assertEqual(client.get('/api/admin/keys/gemini').status_code,405)
             self.assertEqual(client.post('/api/admin/test/gemini',headers=headers()).status_code,503)
         self.assertEqual(store.calls,[('admin_fixture','gemini',KEY)])

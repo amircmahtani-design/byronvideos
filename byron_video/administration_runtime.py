@@ -73,8 +73,10 @@ def assemble_administration(*, config, processing_plan, bindings, acceptance, re
     from .voice_library import FirestoreVoiceLibrary
     library = FirestoreVoiceLibrary(bindings.firestore_client, project_id=target['project_id'], namespace=db['namespace'])
     # No provider callbacks, including voice lookup: names are typed as shown in ElevenLabs.
+    from .key_records import FirestoreKeyRecords
+    records = FirestoreKeyRecords(bindings.firestore_client, project_id=target['project_id'], namespace=db['namespace'])
     install_admin_routes(app, session_resolver=admin_session, private_store=secrets, voice_library=library,
-        allowed_origin=auth['origin'], activated=True, native_api_mode=mode)
+        key_records=records, allowed_origin=auth['origin'], activated=True, native_api_mode=mode)
     @app.get('/api/creator-capabilities')
     def capabilities():
         return {'enabled': False, 'render_ready': False, 'administration_only': True}

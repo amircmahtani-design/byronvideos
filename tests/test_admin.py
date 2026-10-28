@@ -46,7 +46,7 @@ def test_csrf_origin_provider_allowlist_and_no_readback():
             assert client.post('/api/admin/keys/elevenlabs', json={'key':KEY}, headers=h).status_code == 403
         assert client.post('/api/admin/keys/other', json={'key':KEY}, headers=headers()).status_code == 404
         response = client.post('/api/admin/keys/elevenlabs', json={'key':KEY}, headers=headers())
-        assert response.json() == {'saved':True, 'tested':False, 'render_ready':False}
+        assert response.json() == {'saved':True, 'saved_at':None, 'tested':False, 'render_ready':False}
         assert response.headers['cache-control'] == 'no-store'
         assert KEY not in response.text
         assert KEY not in client.get('/api/admin/status').text

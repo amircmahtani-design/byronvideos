@@ -27,6 +27,7 @@ async function check() {
     setDeveloperMode(data.native_api_mode === "gemini_developer");
     csrf = data.csrf_token; fields.disabled = false;
     status.textContent = 'Administrator connected. Film generation is not activated.';
+    for (const [provider, info] of Object.entries(data.saved_keys || {})) showSaved(provider, info);
     loadVoices();
   } catch {
     status.textContent = loginRequired ? 'Sign in with the permitted administrator account. Do not paste keys until connected.' : 'Administrator setup is not connected yet. Do not paste keys here.';
@@ -34,20 +35,34 @@ async function check() {
   }
 }
 async function submit(path, body, input, success) {
-  if (!csrf || working) return;
+  if (!csrf || working) return null;
   working = true; fields.disabled = true; result.textContent = 'Saving or checking privately…';
   const encoded = body ? JSON.stringify(body) : undefined;
   if (input) input.value = '';
   try {
-    await request(path, {method: 'POST', headers: {'Content-Type':'application/json', 'X-CSRF-Token':csrf}, body:encoded});
+    const data = await request(path, {method: 'POST', headers: {'Content-Type':'application/json', 'X-CSRF-Token':csrf}, body:encoded});
     result.textContent = success + ' Film generation is still not activated.';
-  } catch { result.textContent = 'Could not confirm this action. Check administrator access, connection and key permissions, then try again. No media was generated.'; }
+    return data;
+  } catch { result.textContent = 'Could not confirm this action. Check administrator access, connection and key permissions, then try again. No media was generated.'; return null; }
   finally { working = false; fields.disabled = !csrf; }
 }
+// Shows that a key is saved without ever bringing the key back to the browser.
+function showSaved(provider, info) {
+  const input = document.getElementById(`${provider}-key`);
+  if (!input) return;
+  let note = document.getElementById(`${provider}-saved`);
+  if (!note) { note = document.createElement('p'); note.id = `${provider}-saved`; note.className = 'muted'; input.after(note); }
+  const stamp = info && typeof info.saved_at === 'number' ? info.saved_at : null;
+  const ending = info && typeof info.ending === 'string' && /^[A-Za-z0-9_-]{4}$/.test(info.ending) ? info.ending : null;
+  const when = stamp ? new Date(stamp * 1000).toLocaleString([], {dateStyle: 'medium', timeStyle: 'short'}) : 'just now';
+  input.placeholder = '••••••••••••••••' + (ending || '••••') + '  saved';
+  note.textContent = `✓ Key saved ${when}${ending ? `, ends in …${ending}` : ''}. Paste a new key only if you want to replace it.`;
+}
 for (const provider of ['elevenlabs','fal']) {
-  document.getElementById(`${provider}-form`).addEventListener('submit', event => {
+  document.getElementById(`${provider}-form`).addEventListener('submit', async event => {
     event.preventDefault(); const input = document.getElementById(`${provider}-key`);
-    submit(`/api/admin/keys/${provider}`, {key:input.value.trim()}, input, 'Key saved privately. Use Test saved connection to verify it.');
+    const data = await submit(`/api/admin/keys/${provider}`, {key:input.value.trim()}, input, 'Key saved privately.');
+    if (data && data.saved === true) showSaved(provider, data.saved_at);
   });
 }
 document.getElementById('gemini-form').addEventListener('submit', event => {

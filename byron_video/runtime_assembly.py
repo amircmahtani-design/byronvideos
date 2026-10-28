@@ -23,6 +23,7 @@ from .private_config import SecretManagerConfig
 from .preview_runtime import verify_runtime_authorization
 from .voices import ElevenLabsVoiceReader
 from .voice_library import FirestoreVoiceLibrary
+from .key_records import FirestoreKeyRecords
 from .admin import install_admin_routes
 from .cloud_journal import FirestoreJobStore, FirestoreDispatchJournal, FirestoreArtifactRegistry
 from .cloud_storage import CloudUploadStore, CloudArtifactReader, CloudArtifactWriter
@@ -294,6 +295,7 @@ def assemble_runtime(*, config, processing_plan, firestore_client, storage_clien
         return identity.admin_session(request)
     install_admin_routes(app, session_resolver=admin_session, private_store=secrets,
         connection_tester=test_connection, voice_provider=elevenlabs, voice_library=library, voice_namer=elevenlabs.name_of,
+        key_records=FirestoreKeyRecords(firestore_client, **dbargs),
         allowed_origin=auth['origin'], activated=enabled, native_api_mode=native_mode)
     def admin_creator_session(request):
         session = admin_session(request)

@@ -37,7 +37,7 @@ class NamedVoiceInput(VoiceInput):
 
 
 def install_admin_routes(app, *, session_resolver=None, private_store=None,
-                         connection_tester=None, voice_provider=None, voice_library=None, voice_namer=None,
+                         connection_tester=None, voice_provider=None, voice_library=None, voice_namer=None, key_records=None,
                          allowed_origin=None, activated=False, native_api_mode="vertex_eu"):
     """Explicit mounting only. Activation requires separate deployment approval.
 
@@ -81,8 +81,14 @@ def install_admin_routes(app, *, session_resolver=None, private_store=None,
         session = await authorize(request)
         if private_store is None:
             raise HTTPException(503, "Private configuration storage is not connected yet.")
+        saved = {}
+        if key_records is not None:
+            try:
+                saved = await invoke(key_records.read)
+            except Exception:
+                saved = {}
         return {"enabled": True, "csrf_token": session.csrf_token, "render_ready": False, "native_api_mode": native_api_mode,
-                "message": "Administrator connected. Saving keys does not activate film generation."}
+                "saved_keys": saved, "message": "Administrator connected. Saving keys does not activate film generation."}
 
     @app.post("/api/admin/keys/{provider}")
     async def save_key(provider: str, body: KeyInput, request: Request):
@@ -97,7 +103,13 @@ def install_admin_routes(app, *, session_resolver=None, private_store=None,
             await invoke(private_store.save_key, session.subject, provider, key)
         except Exception:
             raise HTTPException(503, "Key save could not be confirmed. Nothing was tested or generated.") from None
-        return {"saved": True, "tested": False, "render_ready": False}
+        record = None
+        if key_records is not None:
+            try:
+                record = await invoke(key_records.mark_saved, provider, key)
+            except Exception:
+                record = None  # The key itself is saved; only the display record failed.
+        return {"saved": True, "saved_at": record, "tested": False, "render_ready": False}
 
     @app.post("/api/admin/test/{provider}")
     async def test_connection(provider: str, request: Request):
