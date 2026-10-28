@@ -4,6 +4,19 @@ import unittest
 
 WORKFLOW = Path(__file__).resolve().parents[1] / '.github/workflows/resolve-hosted-runtime.yml'
 
+def named_step(text, name):
+    marker = '      - name: ' + name + '\n'
+    if text.count(marker) != 1:
+        raise AssertionError('Expected one exact named workflow step: ' + name)
+    return text.split(marker, 1)[1].split('      - name:', 1)[0].split('\n#', 1)[0]
+
+
+def artifact_paths(step):
+    if step.count('          path: |\n') != 1:
+        raise AssertionError('Expected one explicit artifact path block')
+    return {line.strip() for line in step.split('          path: |\n', 1)[1].splitlines() if line.strip()}
+
+
 class RuntimeWorkflowChecks(unittest.TestCase):
     def test_unprivileged_pr_trigger_and_explicit_patch_default(self):
         text = WORKFLOW.read_text()
@@ -47,12 +60,43 @@ class RuntimeWorkflowChecks(unittest.TestCase):
         self.assertIn('docker run --rm --network=none --read-only', text)
         self.assertIn('python3 -m pytest -q -p no:cacheprovider', text)
         self.assertIn('BYRON_REQUIRE_MEDIA_TESTS=1', text)
-        paths = text.split('          path: |\n', 1)[1].split('\n#', 1)[0].splitlines()
-        names = {line.strip().removeprefix('${{ runner.temp }}/byron-runtime-output/') for line in paths if line.strip()}
-        self.assertEqual(names, {'base-resolution.json','materials.json','requirements.lock','sdk-lock.json',
+        evidence = named_step(text, 'Upload only public dependency identities and review evidence')
+        names = {'base-resolution.json','materials.json','requirements.lock','sdk-lock.json',
                                 'resolution-status.json','sbom.cdx.json','pypi-artifacts.json','apt-policy.txt',
-                                'candidate-pins.txt','candidate-image-id.json'})
+                                'candidate-pins.txt','candidate-image-id.json'}
+        self.assertEqual(artifact_paths(evidence), {'${{ runner.temp }}/byron-runtime-output/' + name for name in names})
         self.assertNotIn('playwright install', text)
         self.assertNotIn('npm install', text)
+
+    def test_image_export_has_separate_exact_allowlist_and_success_scope(self):
+        text = WORKFLOW.read_text()
+        export_name = 'Export the tested public image for isolated operator transfer'
+        upload_name = 'Upload public tested image with one-day retention'
+        export, upload = named_step(text, export_name), named_step(text, upload_name)
+        gate = "if: github.event_name == 'pull_request' && github.head_ref == 'candidate/private-studio-v9-20261027' && github.event.pull_request.head.repo.full_name == github.repository"
+        for step in (export, upload):
+            self.assertIn(gate, step)
+            self.assertNotIn('always()', step)
+            self.assertNotIn('continue-on-error', step)
+        self.assertNotIn('continue-on-error', text)
+        self.assertLess(text.index('      - name: Full pinned tests with no network, credentials or provider access'), text.index('      - name: ' + export_name))
+        self.assertLess(text.index('      - name: ' + export_name), text.index('      - name: ' + upload_name))
+        self.assertEqual(artifact_paths(upload), {'${{ runner.temp }}/byron-image-transfer/image.tar.gz',
+                                                '${{ runner.temp }}/byron-image-transfer/transfer.json'})
+        self.assertIn('retention-days: 1\n', upload)
+        self.assertIn('if-no-files-found: error', upload)
+        self.assertIn("assert 0<info['Size']<=5*1024**3", export)
+        self.assertIn('assert archive.stat().st_size<=1024**3', export)
+        self.assertIn("['docker','save','byron-hosted-candidate']", export)
+        for binding in ('head_commit=head', "image_id=info['Id']", 'archive_sha256=sha.hexdigest()', 'application_sources=sources'):
+            self.assertIn(binding, export)
+
+    def test_named_artifact_parser_does_not_depend_on_first_path_block(self):
+        text = WORKFLOW.read_text()
+        evidence = named_step(text, 'Upload only public dependency identities and review evidence')
+        prefixed = '      - name: Unrelated artifact\n          path: |\n            private-config.json\n' + text
+        self.assertEqual(named_step(prefixed, 'Upload only public dependency identities and review evidence'), evidence)
+        with self.assertRaises(AssertionError):
+            named_step(text + text, 'Upload only public dependency identities and review evidence')
 
 if __name__ == '__main__': unittest.main()
