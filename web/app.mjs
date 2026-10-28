@@ -4,7 +4,7 @@ import {MAX_SCRIPT_CHARACTERS, countWords, validateScript, validateImages, moveI
 import {hostedCapability, freezeSubmission, submitHosted, persistPending, persistHostedJob, recoverSubmission, resumeCheckpoint, persistResume, resumeResolved, resumeHosted} from './hosted.mjs';
 
 const $ = id => document.getElementById(id);
-const ui = Object.fromEntries(['exact-actions','exact-note','approve-film','renew-preview','renew-clean','clean-download','check-exact','voice','refresh-voices','voice-status','creator','inputs','script','script-count','images','paintings','empty-images','convert','connection','reconnect','error','job','job-title','job-message','job-note','progress','download','new-film','resume','resume-film','prototype-title','prototype-copy'].map(id => [id, $(id)]));
+const ui = Object.fromEntries(['exact-actions','exact-note','approve-film','renew-preview','renew-clean','clean-download','check-exact','voice','refresh-voices','voice-status','creator','inputs','script','script-count','images','paintings','empty-images','convert','connection','reconnect','error','job','job-title','job-message','job-note','progress','download','new-film','resume','resume-film','prototype-title','prototype-copy','studio-status'].map(id => [id, $(id)]));
 let paintings = [];
 let ready = false;
 let activeJob = null;
@@ -117,6 +117,7 @@ async function checkRenderer() {
       ui['prototype-title'].textContent = hosted.preview ? 'Private first-film DRAFT preview.' : hosted.live ? 'Private studio — creator connected.' : 'Hosted test workspace connected — no live generation.';
       ui['prototype-copy'].textContent = hosted.preview ? 'Generate a private watermarked draft to watch and assess as a whole. It is not approved for publication. Your originals and narrator stay fixed.' : hosted.live ? 'Your original paintings are uploaded privately in the order shown. Your narrator is fixed when you start. Nothing is published automatically.' : 'This fixture workspace tests private upload order and your chosen narrator. It does not call paid providers or generate a live film. Nothing is published.';
       ui.connection.textContent = hosted.preview ? 'Private DRAFT workspace connected. Choose your narrator and make a preview.' : hosted.live ? 'Private studio connected. Choose your narrator and make your film.' : 'Test workspace connected. Choose a narrator to test the private submission workflow.';
+      ui['studio-status'].hidden = hosted.live; // The live studio shows only the steps; the box returns if anything breaks.
       return;
     }
     ready = true; localRenderer = true; showVoices();
@@ -133,7 +134,7 @@ async function checkRenderer() {
       ui.connection.textContent = 'Sign in with your permitted Google account to open the private creator.';
       ui.reconnect.textContent = 'Sign in';
     }
-  } finally { checking = false; ui.reconnect.disabled = false; updateConvert(); }
+  } finally { if (!hosted?.live) ui['studio-status'].hidden = false; checking = false; ui.reconnect.disabled = false; updateConvert(); }
 }
 function stopPolling() { clearTimeout(timer); timer = null; pollController?.abort(); pollController = null; }
 function saveActiveJob(id) { try { if (id) { sessionStorage.setItem('byron-active-job', id); sessionStorage.setItem('byron-active-job-mode', hostedJob ? 'hosted' : 'local'); } else { sessionStorage.removeItem('byron-active-job'); sessionStorage.removeItem('byron-active-job-mode'); } } catch { /* Private browsing may disable storage. */ } }
