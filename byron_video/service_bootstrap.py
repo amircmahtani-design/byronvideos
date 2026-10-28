@@ -69,6 +69,7 @@ def main(argv=None):
     parser.add_argument('--config',type=Path);parser.add_argument('--processing-plan',type=Path)
     parser.add_argument('--bootstrap-env');parser.add_argument('--reviewer-key-sha256')
     parser.add_argument('--administration-only',action='store_true',help='Signed owner setup only; no generation or provider calls.')
+    parser.add_argument('--lean-generation',action='store_true',help='With --administration-only and a signed lean_generation config section: owner-only capped films.')
     parser.add_argument('--sdk-lock',default=Path('/opt/byron-runtime/sdk-lock.json'),type=Path);parser.add_argument('--serve',action='store_true')
     parser.add_argument('--legacy-private-bindings',action='store_true',help='Explicit backwards-compatible reviewed private Python adapter mode; not required for packaged serving.')
     parser.add_argument('--bindings',type=Path);parser.add_argument('--bindings-sha256')
@@ -84,6 +85,8 @@ def main(argv=None):
                 args.production_policy,args.policy_public_key,args.billing_contract,args.billing_public_key,
                 args.infrastructure_authorization,args.policy_env,args.policy_key_sha256,args.billing_key_sha256)):
             raise ValueError('Setup-only mode cannot mix generation authority or legacy adapters.')
+        if args.lean_generation and not args.administration_only:
+            raise ValueError('Lean generation starts only from the signed setup-only bundle.')
         bundle=None
         if args.bootstrap_env:
             if any((args.config,args.processing_plan,args.acceptance,args.reviewer_public_key,args.legacy_private_bindings)):
@@ -97,6 +100,9 @@ def main(argv=None):
             config=validate_config(strict_json(private_bytes(args.config,512_000)))
             plan=validate_private_plan(strict_json(private_bytes(args.processing_plan,128_000)))
         lock=private_bytes(args.sdk_lock,128_000);validate_service_runtime(config,lock)
+        if args.lean_generation:
+            from .lean_film import lean_settings,owner_for
+            lean_settings(config);owner_for(config)
         if not args.serve:
             print(json.dumps({'status':'VALIDATED_NOT_STARTED','live_ready':False}));return 0
         if (bundle is None and not all((args.acceptance,args.reviewer_public_key))) or not 1024<=args.port<=65535:
@@ -142,7 +148,11 @@ def main(argv=None):
             from .service_bindings import build_service_bindings
             bindings=build_service_bindings(config=config,processing_plan=plan,sdk_lock_bytes=lock,
                 acceptance=acceptance,reviewer_public_key=key,enabled=True,administration_only=args.administration_only)
-        if args.administration_only:
+        if args.lean_generation:
+            from .administration_runtime import assemble_lean
+            runtime=assemble_lean(config=config,processing_plan=plan,bindings=bindings,
+                acceptance=acceptance,reviewer_public_key=key)
+        elif args.administration_only:
             from .administration_runtime import assemble_administration
             runtime=assemble_administration(config=config,processing_plan=plan,bindings=bindings,
                 acceptance=acceptance,reviewer_public_key=key)

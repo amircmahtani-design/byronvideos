@@ -32,7 +32,8 @@ def verify_administration(envelope, key, config_sha, plan_sha, *, now=None):
     return json.loads(canonical(p))
 
 
-def assemble_administration(*, config, processing_plan, bindings, acceptance, reviewer_public_key):
+def assemble_administration(*, config, processing_plan, bindings, acceptance, reviewer_public_key, generation=None):
+    """generation is an internal hook used only by assemble_lean; default is setup-only."""
     from .deployment_plan import validate_config
     from .hosted_control import validate_private_plan
     from .google_identity import GoogleIdentityResolver
@@ -77,9 +78,14 @@ def assemble_administration(*, config, processing_plan, bindings, acceptance, re
     records = FirestoreKeyRecords(bindings.firestore_client, project_id=target['project_id'], namespace=db['namespace'])
     install_admin_routes(app, session_resolver=admin_session, private_store=secrets, voice_library=library,
         key_records=records, allowed_origin=auth['origin'], activated=True, native_api_mode=mode)
-    @app.get('/api/creator-capabilities')
-    def capabilities():
-        return {'enabled': False, 'render_ready': False, 'administration_only': True}
+    if generation is None:
+        @app.get('/api/creator-capabilities')
+        def capabilities():
+            return {'enabled': False, 'render_ready': False, 'administration_only': True}
+    else:
+        from types import SimpleNamespace
+        generation(app, SimpleNamespace(check=check, admin_session=admin_session, identity=identity, library=library,
+            config=config, plan=plan, owners=owners, release_sha256=digest(acceptance)))
     @app.get('/api/voices')
     def named_voices(request: Request):
         try:
@@ -93,8 +99,25 @@ def assemble_administration(*, config, processing_plan, bindings, acceptance, re
     @app.get('/admin', include_in_schema=False)
     def admin_page():
         return RedirectResponse('/admin.html', status_code=308)
-    # No job/upload/resume/exact-film routes or dispatcher exist in this mode.
+    # Setup-only mode has no job/upload/resume/exact-film routes or dispatcher; lean
+    # routes exist only through assemble_lean's explicit hook above.
     web_root = Path(__file__).resolve().parent.parent / 'web'
     require(not web_root.is_symlink() and (web_root / 'index.html').is_file(), 'Reviewed assets required.')
     app.mount('/', StaticFiles(directory=str(web_root), html=True, follow_symlink=False), name='creator-assets')
     return RuntimeAssembly(app, None, None, None, None, None, identity, True, digest(acceptance))
+
+
+def assemble_lean(*, config, processing_plan, bindings, acceptance, reviewer_public_key, transaction_runner=None):
+    """Same signed setup bundle plus its signed `lean_generation` section; owner-only paid films.
+
+    No production policy, billing contract, preview acceptance or Gemini is used.
+    """
+    from .deployment_plan import validate_config
+    from .lean_film import lean_settings, owner_for
+    from .lean_service import install_lean_generation
+    checked = validate_config(config)
+    settings = lean_settings(checked); owner_for(checked)
+    def generation(app, parts):
+        install_lean_generation(app, parts=parts, bindings=bindings, settings=settings, transaction_runner=transaction_runner)
+    return assemble_administration(config=checked, processing_plan=processing_plan, bindings=bindings,
+        acceptance=acceptance, reviewer_public_key=reviewer_public_key, generation=generation)

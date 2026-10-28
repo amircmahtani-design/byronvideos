@@ -16,7 +16,10 @@ def need(value,message):
 
 def validate_config(value):
     base_keys={'schema_version','status','target','firestore','identity','secret_resources','budget','narration_profile','runtime'}
-    need(isinstance(value,dict) and set(value) in (base_keys,base_keys|{'native_api_mode'}),'Use the exact private deployment configuration schema.')
+    need(isinstance(value,dict) and base_keys<=set(value)<=base_keys|{'native_api_mode','lean_generation'},'Use the exact private deployment configuration schema.')
+    if 'lean_generation' in value:
+        from .lean_film import validate_lean_settings
+        validate_lean_settings(value['lean_generation'])
     mode=value.get('native_api_mode','vertex_eu')
     need(mode in ('vertex_eu','gemini_developer'),'Choose one explicit native API mode; fallback/auto routing is forbidden.')
     need(type(value['schema_version']) is int and value['schema_version']==1 and value['status']=='DRAFT_NOT_ACTIVATED','This validator cannot activate a deployment.')
