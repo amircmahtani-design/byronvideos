@@ -5,6 +5,7 @@ private configuration, then verifies attached project/account before SDK or secr
 access. This constructs existing-resource clients; it never creates resources.
 """
 import json
+import re
 from .deployment_plan import validate_config
 from .hosted_control import canonical,digest,require,validate_private_plan
 from .preview_runtime import verify_runtime_authorization
@@ -66,7 +67,11 @@ def build_service_bindings(*,config,processing_plan,sdk_lock_bytes,acceptance,re
     response=secrets.access_secret_version(request={'name':name},retry=None,timeout=20)
     activation_check()
     data=response.payload.data
-    require(getattr(response,'name',None)==name and isinstance(data,bytes) and 32<=len(data)<=4096,
+    # Secret Manager echoes the version name with the project NUMBER, never the ID.
+    returned=getattr(response,'name',None)
+    project_or_number=r'projects/(?:'+re.escape(checked['target']['project_id'])+r'|[1-9][0-9]{0,19})/'
+    require(isinstance(returned,str) and re.fullmatch(project_or_number+re.escape(name.split('/',2)[2]),returned)
+            and isinstance(data,bytes) and 32<=len(data)<=4096,
             'Pinned private CSRF secret version is unavailable or invalid.')
     require(type(response.payload.data_crc32c) is int and response.payload.data_crc32c==crc32c(data),
             'CSRF secret integrity verification failed.')

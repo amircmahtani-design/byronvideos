@@ -57,8 +57,14 @@ class ServiceBindingsChecks(unittest.TestCase):
         self.clients[0]._database_string='projects/synthetic-project/databases/(default)'
         with self.assertRaises(ValueError):self.build()
         self.assertFalse(any(name=='secret' for name,_ in self.calls))
+    def test_secret_manager_project_number_echo_is_accepted(self):
+        self.response=SimpleNamespace(name='projects/285750040978/secrets/'+self.name.split('/secrets/',1)[1],payload=self.response.payload)
+        self.assertEqual(self.build().csrf_secret,self.secret)
     def test_secret_name_integrity_and_length_are_mandatory(self):
+        other='projects/285750040978/secrets/other/versions/7'
         for response in [SimpleNamespace(name=self.name+'/extra',payload=self.response.payload),
+                SimpleNamespace(name=other,payload=self.response.payload),
+                SimpleNamespace(name=self.name.replace('/versions/7','/versions/8'),payload=self.response.payload),
                 SimpleNamespace(name=self.name,payload=SimpleNamespace(data=self.secret,data_crc32c=0)),
                 SimpleNamespace(name=self.name,payload=SimpleNamespace(data=b'short',data_crc32c=packaged.crc32c(b'short')))]:
             self.response=response
