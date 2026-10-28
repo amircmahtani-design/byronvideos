@@ -93,6 +93,61 @@ jobs:
           node --version
           node --test web/*.test.mjs
           node --check web/app.mjs
+      - name: Export the tested public image for isolated operator transfer
+        if: github.event_name == 'pull_request' && github.head_ref == 'candidate/private-studio-v9-20261027' && github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          CANDIDATE_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python3 - <<'PY'
+          import gzip,hashlib,json,os,pathlib,re,subprocess
+          head=os.environ['CANDIDATE_HEAD']
+          assert re.fullmatch(r'[a-f0-9]{40}',head)
+          info=json.loads(subprocess.check_output(['docker','image','inspect','byron-hosted-candidate']))[0]
+          assert info['Os']=='linux' and info['Architecture']=='amd64'
+          assert info['Config']['User']=='65532:65532'
+          assert 0<info['Size']<=5*1024**3,'Image exceeds reviewed size ceiling'
+          root=pathlib.Path(os.environ['RUNNER_TEMP'])/'byron-image-transfer';root.mkdir()
+          archive=root/'image.tar.gz'
+          # This image was built only from the public allowlisted context above.
+          # No credentials, private bundles, host files or user media were mounted.
+          with subprocess.Popen(['docker','save','byron-hosted-candidate'],stdout=subprocess.PIPE) as proc:
+              with archive.open('xb') as raw,gzip.GzipFile(filename='',mode='wb',fileobj=raw,mtime=0) as output:
+                  while chunk:=proc.stdout.read(1024*1024):
+                      output.write(chunk)
+                      if raw.tell()>1024**3:
+                          proc.kill()
+                          raise ValueError('Transfer archive exceeds 1GiB ceiling')
+              assert proc.wait()==0,'Docker image export failed'
+          assert archive.stat().st_size<=1024**3
+          sha=hashlib.sha256()
+          with archive.open('rb') as source:
+              while chunk:=source.read(1024*1024):sha.update(chunk)
+          context=pathlib.Path(os.environ['RUNTIME_OUTPUT'])/'materials'
+          sources={}
+          for folder in ('byron_video','style-guide','web'):
+              for path in sorted((context/folder).rglob('*')):
+                  if path.is_file():
+                      assert not path.is_symlink()
+                      sources[str(path.relative_to(context))]=hashlib.sha256(path.read_bytes()).hexdigest()
+          metadata=dict(schema_version=1,head_commit=head,
+              checkout_commit=subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),
+              image_id=info['Id'],image_bytes=info['Size'],platform='linux/amd64',
+              archive_file=archive.name,archive_bytes=archive.stat().st_size,archive_sha256=sha.hexdigest(),
+              application_sources=sources,provider_calls=0,contains_private_configuration=False,
+              registry_pushed=False,deployed=False)
+          (root/'transfer.json').write_text(json.dumps(metadata,indent=2,sort_keys=True)+'\n')
+          PY
+      - name: Upload public tested image with one-day retention
+        if: github.event_name == 'pull_request' && github.head_ref == 'candidate/private-studio-v9-20261027' && github.event.pull_request.head.repo.full_name == github.repository
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: public-tested-runtime-image
+          retention-days: 1
+          compression-level: 0
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/byron-image-transfer/image.tar.gz
+            ${{ runner.temp }}/byron-image-transfer/transfer.json
       - name: Upload only public dependency identities and review evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -111,6 +166,8 @@ jobs:
             ${{ runner.temp }}/byron-runtime-output/apt-policy.txt
             ${{ runner.temp }}/byron-runtime-output/candidate-pins.txt
             ${{ runner.temp }}/byron-runtime-output/candidate-image-id.json
-# Credential-free PR/manual candidate CI only. Never uploads source, image layers, private configs,
-# provider payloads/media, tokens, raw environment or an unsanitized recovery ZIP.
+# Credential-free PR/manual CI. The reviewed same-repository candidate branch can
+# export one bounded public image only AFTER all tests pass, with one-day retention.
+# Never uploads private configs, provider payloads/media, tokens, raw environment
+# or an unsanitized recovery ZIP. No automatic image deployment or cloud grants.
 # No cloud authentication, deployment, registry push or automatic activation.
