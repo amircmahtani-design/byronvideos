@@ -33,15 +33,19 @@ class AttachedWorkloadTokenReader:
             client_factory=httpx.Client
         try:
             with client_factory(timeout=5,follow_redirects=False,trust_env=False) as client,_wall_deadline(client,20,time.monotonic) as check:
-                calls=0
+                calls=0;named_info_read=False
                 def request(url,method='GET',body=None,headers=None,timeout=None,**kwargs):
-                    nonlocal calls
+                    nonlocal calls,named_info_read
                     calls+=1;check();need(calls<=5 and self.activation() is True,'Metadata request bound or activation expired.')
-                    parsed=urlsplit(url);prefix='/computeMetadata/v1/instance/service-accounts/'+self.email+'/'
-                    path=unquote(parsed.path)
+                    accounts='/computeMetadata/v1/instance/service-accounts/';prefix=accounts+self.email+'/'
+                    parsed=urlsplit(url);path=unquote(parsed.path)
+                    # google-auth always fetches the token via the 'default' alias after reading the
+                    # named account's info; allow only that, once the exact account was read.
+                    named=path.startswith(prefix) and path[len(prefix):] in ('','token')
+                    default_token=named_info_read and path==accounts+'default/token'
                     need(parsed.scheme=='http' and parsed.hostname=='metadata.google.internal' and parsed.port in (None,80)
                          and not parsed.username and not parsed.password and not parsed.fragment and method=='GET' and body is None
-                         and path.startswith(prefix) and path[len(prefix):] in ('','token') and not kwargs,
+                         and (named or default_token) and not kwargs,
                          'Only the configured attached-account metadata may be read; no credentials endpoint fallback.')
                     needed={str(k).lower():v for k,v in (headers or {}).items()}
                     need(needed.get('metadata-flavor')=='Google' and not any(k in needed for k in ('authorization','proxy-authorization')),
@@ -52,6 +56,7 @@ class AttachedWorkloadTokenReader:
                         raw=bytearray()
                         for part in response.iter_bytes():
                             check();need(len(raw)+len(part)<=65536,'Metadata response exceeds bound.');raw.extend(part)
+                        if path==prefix:named_info_read=True
                         return SimpleNamespace(status=200,data=bytes(raw),headers=dict(response.headers))
                 credentials.refresh(request)
             need(self.activation() is True and credentials.service_account_email==self.email and credentials.universe_domain=='googleapis.com',

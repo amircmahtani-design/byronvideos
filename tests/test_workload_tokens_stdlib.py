@@ -16,17 +16,18 @@ class Client:
     def __exit__(self,*args):pass
     def close(self):pass
     def stream(self,*args,**kw):Client.calls.append((args,kw));return Response()
+ACCOUNTS='http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/'
 class Creds:
-    bad_url=None;bad_identity=False;seconds=100
+    bad_url=None;bad_identity=False;seconds=100;urls=None
     def __init__(self,**kw):
         self.service_account_email=kw['service_account_email'];self.universe_domain=kw['universe_domain'];self.token='fixture-access-token-not-real'
         self.expiry=datetime.fromtimestamp(1000+self.seconds,timezone.utc)
     def refresh(self,request):
-        url=self.bad_url or 'http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/'+EMAIL+'/token?scopes=fixture'
-        request(url,headers={'metadata-flavor':'Google'})
+        for url in self.urls or [self.bad_url or ACCOUNTS+EMAIL+'/token?scopes=fixture']:
+            request(url,headers={'metadata-flavor':'Google'})
         if self.bad_identity:self.service_account_email='other'
 class TokenChecks(unittest.TestCase):
-    def setUp(self):Client.calls=[];Creds.bad_url=None;Creds.bad_identity=False;Creds.seconds=100
+    def setUp(self):Client.calls=[];Creds.bad_url=None;Creds.bad_identity=False;Creds.seconds=100;Creds.urls=None
     def reader(self,**kw):return AttachedWorkloadTokenReader(service_account_email=EMAIL,activation_check=lambda:True,
         client_factory=Client,credentials_factory=Creds,now=lambda:1000,**kw)
     def test_disabled_no_sdk_or_transport(self):
@@ -41,6 +42,15 @@ class TokenChecks(unittest.TestCase):
                     'http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/'+EMAIL+'/../default/token']:
             Creds.bad_url=url
             with self.subTest(url=url),self.assertRaises(RuntimeError):self.reader(enabled=True)()
+    def test_google_auth_default_token_alias_only_after_named_info(self):
+        # google-auth reads the named account's info, then always fetches the token via 'default'.
+        Creds.urls=[ACCOUNTS+EMAIL+'/?recursive=true',ACCOUNTS+'default/token?scopes=fixture']
+        self.assertEqual(self.reader(enabled=True)().expires_at,1100)
+        for urls in ([ACCOUNTS+'default/?recursive=true',ACCOUNTS+'default/token'],
+                     [ACCOUNTS+'other-account@fixture-project.iam.gserviceaccount.com/',ACCOUNTS+'default/token'],
+                     [ACCOUNTS+EMAIL+'/',ACCOUNTS+'default/email'],[ACCOUNTS+EMAIL+'/',ACCOUNTS+'default/identity']):
+            Creds.urls=urls
+            with self.subTest(urls=urls),self.assertRaises(RuntimeError):self.reader(enabled=True)()
     def test_mismatched_identity_rejected(self):
         Creds.bad_identity=True
         with self.assertRaises(RuntimeError):self.reader(enabled=True)()
