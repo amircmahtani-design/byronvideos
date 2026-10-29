@@ -1,4 +1,4 @@
-"""Lean 5/2/3 timing math and join metric; the real render runs only where ffmpeg exists."""
+"""Lean anchored-motion timing math and join metric; the real render runs only where ffmpeg exists."""
 import json
 import math
 import re
@@ -11,92 +11,95 @@ from pathlib import Path
 
 from PIL import Image
 
-from byron_video.lean_composition import (FULL_SCENE, MIDDLE_RAMP, RAMP, TWO_PART_SCENE, camera, drift_at, frame_difference,
-                                          scene_plan, state_at, still_frame, still_windows)
+from byron_video.lean_composition import (DEPTH, FADE, ONE_PASS_SCENE, RAMP, TURN, TWO_MOMENTS_SCENE, camera, drift_at,
+                                          frame_difference, scene_plan, state_at, still_frame, still_windows)
+
+ANCHOR_TOLERANCE = 1e-6
 
 
-def parts(plan):
-    return [(round(s.at, 6), round(s.clip_from, 6), round(s.clip_to, 6)) for s in plan['segments']]
+def samples(s, count=200):
+    return [s.clip_time(s.length * i / count) for i in range(count + 1)]
 
 
 class SceneRuleChecks(unittest.TestCase):
-    def assert_forward_once(self, plan):
-        previous_end, previous_clip = 0., 0.
+    def assert_anchored(self, plan):
+        """Motion only meets the still at clip anchors 0 or L (both the original painting); legs never overlap."""
+        L, previous_end = plan['clip_seconds'], 0.
         for s in plan['segments']:
-            self.assertGreaterEqual(s.at, previous_end - 1e-9)  # No overlap between parts.
-            self.assertGreaterEqual(s.clip_from, previous_clip - 1e-9)  # Clip frames forward only, used once.
-            times = [s.clip_time(s.length * i / 200) for i in range(201)]
-            self.assertTrue(all(b >= a - 1e-9 for a, b in zip(times, times[1:])))  # Never backwards.
-            self.assertAlmostEqual(times[0], s.clip_from); self.assertAlmostEqual(times[-1], s.clip_to)
-            previous_end, previous_clip = s.end, s.clip_to
+            self.assertGreaterEqual(s.at, previous_end - 1e-9)
+            times = samples(s)
+            step = (lambda a, b: a - b) if s.reverse else (lambda a, b: b - a)
+            self.assertTrue(all(step(a, b) >= -1e-9 for a, b in zip(times, times[1:])))  # Monotonic within a leg.
+            self.assertTrue(all(-1e-9 <= t <= L + 1e-9 for t in times))
+            for edge, fade in ((times[0], s.fade_in), (times[-1], s.fade_out)):
+                if fade:  # Wherever the clip dissolves with the still, it shows an anchor frame.
+                    self.assertTrue(min(abs(edge), abs(edge - L)) < ANCHOR_TOLERANCE, (edge, plan['rule']))
+            previous_end = s.end
+        for a, b in zip(plan['segments'], plan['segments'][1:]):  # A turn joins two legs seamlessly.
+            if not a.fade_out:
+                self.assertAlmostEqual(a.end, b.at); self.assertAlmostEqual(samples(a)[-1], samples(b)[0])
         self.assertLessEqual(previous_end, plan['duration'] + 1e-9)
 
-    def test_full_rule_places_5_2_3_at_start_middle_and_end(self):
-        plan = scene_plan(20, 10)
-        self.assertEqual(plan['rule'], 'full')
-        m = min(RAMP, MIDDLE_RAMP)
-        self.assertEqual(parts(plan), [(0, 0, 5), (10 - (2 + m) / 2, 5, 7), (20 - (3 + RAMP / 2), 7, 10)])
-        first, middle, last = plan['segments']
-        self.assertEqual((first.ramp_in, first.ramp_out), (0, RAMP))  # Direct start: clip t=0 is the original.
-        self.assertEqual((middle.ramp_in, middle.ramp_out), (m, m))
-        self.assertEqual((last.ramp_in, last.ramp_out), (RAMP, 0))  # Clip t=L is the original; scene crossfade follows.
-        self.assertAlmostEqual(last.end, 20); self.assertAlmostEqual(middle.at + middle.length / 2, 10)
-        self.assert_forward_once(plan)
-        self.assertEqual(scene_plan(FULL_SCENE, 10)['rule'], 'full')
+    def test_long_scene_has_two_different_moments_that_return_to_the_painting(self):
+        plan = scene_plan(40, 10)
+        self.assertEqual(plan['rule'], 'two_moments')
+        out, back, late_out, late_back = plan['segments']
+        self.assertEqual((out.clip_from, out.clip_to, out.reverse), (0, DEPTH, False))
+        self.assertEqual((back.clip_from, back.clip_to, back.reverse), (0, DEPTH, True))
+        self.assertEqual((late_out.clip_from, late_out.clip_to, late_out.reverse), (10 - DEPTH, 10, True))
+        self.assertEqual((late_back.clip_from, late_back.clip_to, late_back.reverse), (10 - DEPTH, 10, False))
+        self.assertAlmostEqual(out.at, 0); self.assertAlmostEqual(late_back.end, 40)
+        self.assertEqual((out.ramp_in, out.ramp_out, back.ramp_in, back.ramp_out), (RAMP, TURN, TURN, RAMP))
+        self.assertEqual(len(still_windows(plan)), 1)  # One long rest between the two moments.
+        self.assert_anchored(plan)
+        self.assertEqual(scene_plan(TWO_MOMENTS_SCENE, 10)['rule'], 'two_moments')
+        self.assertEqual(scene_plan(TWO_MOMENTS_SCENE - .01, 10)['rule'], 'one_pass')
 
-    def test_long_scene_spreads_four_new_moments_of_motion(self):
-        plan = scene_plan(45, 10)
-        self.assertEqual(plan['rule'], 'spread')
-        self.assertEqual([(s.clip_from, s.clip_to) for s in plan['segments']], [(0, 4), (4, 6), (6, 8), (8, 10)])  # No repeats.
-        centres = [s.at + s.length / 2 for s in plan['segments'][1:3]]
-        self.assertAlmostEqual(centres[0], 15); self.assertAlmostEqual(centres[1], 30)
-        self.assertAlmostEqual(plan['segments'][-1].end, 45)
-        self.assert_forward_once(plan)
-        self.assertEqual(scene_plan(29.9, 10)['rule'], 'full')
+    def test_medium_scene_plays_the_clip_once_from_painting_to_painting(self):
+        plan = scene_plan(18, 10)
+        self.assertEqual(plan['rule'], 'one_pass')
+        (s,) = plan['segments']
+        self.assertEqual((s.clip_from, s.clip_to, s.reverse, s.fade_in, s.fade_out), (0, 10, False, FADE, FADE))
+        self.assertAlmostEqual(s.at + s.length / 2, 9)  # Centred in the scene.
+        self.assert_anchored(plan)
+        self.assertEqual(scene_plan(ONE_PASS_SCENE, 10)['rule'], 'one_pass')
+        self.assertEqual(scene_plan(ONE_PASS_SCENE, 11)['rule'], 'short')  # A longer clip never overruns the scene.
 
-    def test_short_scene_rules(self):
-        plan = scene_plan(12, 10)
-        self.assertEqual(plan['rule'], 'two_part'); self.assertEqual(parts(plan), [(0, 0, 5), (12 - (3 + RAMP / 2), 7, 10)])
-        self.assertEqual(scene_plan(FULL_SCENE - 0.01, 10)['rule'], 'two_part'); self.assertEqual(scene_plan(TWO_PART_SCENE, 10)['rule'], 'two_part')
-        plan = scene_plan(6, 10)
-        self.assertEqual(plan['rule'], 'opening_only'); self.assertAlmostEqual(plan['segments'][0].ramp_out, min(RAMP, 2.4))
-        self.assertLessEqual(plan['segments'][0].end, 6)
-        for duration in (0.5, 3, 6, 7.99, 8, 9.3, 10.49, 10.5, 11.5, 12, 14.99, 15, 16.99, 17, 30, 61):
-            self.assert_forward_once(scene_plan(duration, 10))
-            self.assert_forward_once(scene_plan(duration, 12))
-
-    def test_longer_clip_never_overlaps_or_rewinds(self):
-        plan = scene_plan(TWO_PART_SCENE, 12)
-        self.assertGreater(plan['segments'][1].clip_from, 7)  # Starts later in the clip instead of overlapping.
-        self.assert_forward_once(plan)
+    def test_every_duration_is_anchored_and_fits(self):
+        for length in (7.5, 10, 10.04, 12):
+            for duration in (0.5, 1.5, 3, 6, 9.35, 11, 12.99, 13, 15, 20, 23.99, 24, 30, 61, 300):
+                plan = scene_plan(duration, length)
+                self.assert_anchored(plan)
+        self.assertEqual(scene_plan(1, 10)['segments'], [])
         with self.assertRaises(ValueError): scene_plan(10, 6)
         with self.assertRaises(ValueError): scene_plan(float('nan'), 10)
 
-    def test_motion_eases_to_rest_while_dissolving_into_the_still(self):
-        plan = scene_plan(20, 10)
-        self.assertEqual(state_at(plan, 0), (0, 0, 1.))
-        first = plan['segments'][0]
-        part, clip, alpha = state_at(plan, first.end - RAMP / 2)
-        self.assertEqual(part, 0); self.assertTrue(4.5 < clip < 5 and 0 < alpha < 1)
-        step = 1 / 24  # Playback speed (clip seconds per output second) falls smoothly towards zero.
-        speeds = [(first.clip_time(u + step) - first.clip_time(u)) / step for u in (first.length - RAMP, first.length - RAMP / 2, first.length - step)]
+    def test_motion_settles_slowly_into_the_painting(self):
+        plan = scene_plan(40, 10)
+        out, back = plan['segments'][:2]
+        self.assertEqual(state_at(plan, 0)[:2], (0, 0))
+        self.assertEqual(state_at(plan, 0)[2], 0.)  # Wakes up from the still.
+        step = 1 / 24  # Playback speed falls smoothly to zero as the subject returns to its pose.
+        speeds = [abs(back.clip_time(u + step) - back.clip_time(u)) / step
+                  for u in (back.length - RAMP, back.length - RAMP / 2, back.length - step)]
         self.assertAlmostEqual(speeds[0], 1, places=2); self.assertTrue(speeds[0] > speeds[1] > speeds[2]); self.assertLess(speeds[2], 0.05)
-        self.assertEqual(state_at(plan, 7), (None, None, 0.))  # Perfectly still painting between parts.
-        middle = plan['segments'][1]
-        self.assertEqual(state_at(plan, middle.at)[2], 0.)  # Middle part wakes up from the still.
-        self.assertAlmostEqual(state_at(plan, 19.999)[1], 10, places=2)
-        self.assertEqual(len(still_windows(plan)), 2)
+        turn = [abs(out.clip_time(u + step) - out.clip_time(u)) / step for u in (out.length - 2 * step,)]
+        self.assertLess(turn[0], 0.1)  # Slows gently into the turn, never snaps back.
+        part, clip, alpha = state_at(plan, back.end - FADE / 2)
+        self.assertEqual(part, 1); self.assertLess(clip, 0.02); self.assertTrue(0 < alpha < 1)  # Dissolve only at the pose.
+        self.assertEqual(state_at(plan, 20), (None, None, 0.))
+        self.assertAlmostEqual(state_at(plan, 39.999)[1], 10, places=2)
 
-    def test_camera_breath_takes_over_as_motion_settles_and_hands_back_at_rest(self):
+    def test_camera_breath_fills_the_rest_and_hands_back_at_rest(self):
         plan = scene_plan(30, 10)
         for start, stop in still_windows(plan):
-            for value, expected in zip(drift_at(plan, start, 0), (1., 0., 0.)):  # Begins exactly as the motion settles.
+            for value, expected in zip(drift_at(plan, start, 0), (1., 0., 0.)):
                 self.assertAlmostEqual(value, expected)
             zoom, x, y = drift_at(plan, stop, 0)
-            self.assertAlmostEqual(zoom, 1); self.assertAlmostEqual(x, 0); self.assertAlmostEqual(y, 0)  # Back at the exact framing.
+            self.assertAlmostEqual(zoom, 1); self.assertAlmostEqual(x, 0); self.assertAlmostEqual(y, 0)
             zoom, x, y = drift_at(plan, (start + stop) / 2, 0)
             self.assertTrue(1 < zoom <= 1.05 and x != 0 and y != 0)
-            self.assertLess(drift_at(plan, start + 0.01, 0)[0] - 1, 1e-5)  # Eased from rest: no jolt.
+            self.assertLess(drift_at(plan, start + 0.01, 0)[0] - 1, 1e-5)
         self.assertEqual(drift_at(plan, 1.0, 0), (1., 0., 0.))  # Camera holds still while the painting moves.
         base = Image.linear_gradient('L').convert('RGB').resize((270, 480))
         self.assertIs(camera(base), base); self.assertEqual(camera(base, 1.05, 1, -1).size, base.size)
@@ -144,10 +147,12 @@ class LeanRenderChecks(unittest.TestCase):
                 {'image_id': 'painting_0002', 'start_seconds': 6.65, 'end_seconds': duration}]}
             manifest = compose_film(root=root, narration_wav=audio, report=report, timing=timing, scenes=scenes,
                                     output=root / 'film' / 'film.mp4', join_threshold=5)
+            self.assertEqual(manifest['composition'], 'lean-anchored-v3')
             self.assertEqual((manifest['width'], manifest['height']), (1080, 1920))
             self.assertEqual(manifest['source_order'], ['painting_0001', 'painting_0002'])
-            self.assertEqual([s['rule'] for s in manifest['scenes']], ['opening_only', 'opening_only'])
+            self.assertEqual([s['rule'] for s in manifest['scenes']], ['short', 'short'])
             self.assertTrue(manifest['joins'] and all(isinstance(j['difference'], float) for j in manifest['joins']))
+            self.assertTrue(any(j['join'] == 'clip_to_still' for j in manifest['joins']))
             self.assertEqual(manifest['flagged_joins'], sum(j['flagged'] for j in manifest['joins']))
             probe = json.loads(subprocess.run(['ffprobe', '-v', 'error', '-show_streams', '-of', 'json', str(root / 'film' / 'film.mp4')],
                                               check=True, capture_output=True).stdout)
