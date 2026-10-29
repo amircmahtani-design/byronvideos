@@ -152,6 +152,7 @@ class LeanWorkerChecks(unittest.TestCase):
         config = lean_config(); config['narration_profile'] = {**config['narration_profile'], 'pacing': 'sentences'}
         story = '\n\n'.join(' '.join(f'Sentence {p}-{s} is here.' for s in range(4)) for p in range(30))  # 120 sentences.
         self.config = config
+        self.store.fail(OWNER, self.job.id, 'Set aside: one film at a time.')  # setUp's film would otherwise hold the lock.
         self.job, _ = self.store.reserve(OWNER, 'lean_request_full_length_01', 'c' * 64, inputs_builder(config, text=story))
         eleven, fal = ElevenLabs(), Fal(); self.compose_fails = False
         pipeline = self.pipeline(eleven, fal); heard = []
