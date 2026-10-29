@@ -230,9 +230,11 @@ def install_lean_routes(app, *, access, owner_id, config, settings, jobs, ledger
                     yield chunk
             finally:
                 stream.close()
+        # No Content-Length: a chunked stream is not subject to Cloud Run's 32 MiB HTTP/1 response
+        # limit, which a full-length film (~66 MB for 3.5 minutes) exceeds.
         return StreamingResponse(chunks(), media_type='video/mp4', headers={
             'Content-Disposition': 'attachment; filename="byron-film.mp4"', 'Cache-Control': 'private, no-store',
-            'X-Content-Type-Options': 'nosniff', 'Content-Length': str(ref['bytes'])})
+            'X-Content-Type-Options': 'nosniff'})
 
 
 def install_lean_generation(app, *, parts, bindings, settings, transaction_runner=None):
