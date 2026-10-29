@@ -37,6 +37,8 @@ from .engine import _colour, _font, draw_caption, make_captions, wrap_caption, w
 from .portrait_composition import input_options, presentation, run, run_bounded, validate_words
 
 RAMP = 2.0
+TAIL = 2.0  # Seconds the last painting lingers after the final word.
+CLOSING_FADE = 1.5  # Gentle fade to charcoal within that tail.
 FULL_SCENE = 16.0
 TWO_PART_SCENE = 10.5
 JOIN_SIZE = (135, 240)
@@ -240,12 +242,15 @@ def compose_film(*, root, narration_wav, report, timing, scenes, output, ramp=RA
     font = _font(round(h * style['captions']['font_height_fraction']), style)
     for caption in captions:
         wrap_caption(caption.text, font, round(w * style['captions']['safe_width_fraction']))
+    # The film does not end on the last word: the final painting lingers in silence, then fades out.
+    voice, duration = duration, duration + TAIL
     items = []
-    for scene, item in zip(timing['scenes'], scenes):
+    for number, (scene, item) in enumerate(zip(timing['scenes'], scenes), 1):
         require(scene['image_id'] == item['image_id'], 'Scene order differs from the numbered paintings.')
         length = clip_seconds(item['clip_path'])
-        items.append({'image_id': item['image_id'], 'start': scene['start_seconds'], 'end': scene['end_seconds'],
-                      'plan': scene_plan(scene['end_seconds'] - scene['start_seconds'], length, ramp),
+        end = scene['end_seconds'] + (TAIL if number == len(scenes) else 0)
+        items.append({'image_id': item['image_id'], 'start': scene['start_seconds'], 'end': end,
+                      'plan': scene_plan(end - scene['start_seconds'], length, ramp),
                       'still': still_frame(item['original_path'], (w, h)), 'clip': item['clip_path']})
     readers, joins = {}, []
 
@@ -281,7 +286,7 @@ def compose_film(*, root, narration_wav, report, timing, scenes, output, ramp=RA
                 '-i', 'pipe:0', *input_options(narration_wav, video=False), '-i', str(narration_wav), '-map', '0:v:0', '-map', '1:a:0',
                 '-c:v', enc['video_codec'], '-preset', enc['video_preset'], '-crf', str(enc['crf']), '-threads', str(enc['encoder_threads']),
                 '-pix_fmt', enc['pixel_format'], '-colorspace', style['canvas']['colour_space'], '-color_primaries', style['canvas']['colour_space'],
-                '-color_trc', style['canvas']['colour_space'], '-c:a', enc['audio_codec'], '-b:a', enc['audio_bitrate'],
+                '-color_trc', style['canvas']['colour_space'], '-af', f'apad=pad_dur={TAIL}', '-c:a', enc['audio_codec'], '-b:a', enc['audio_bitrate'],
                 '-movflags', '+faststart', '-t', f'{duration:.9f}', str(encoded)]
             process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=errors)
             try:
@@ -295,7 +300,7 @@ def compose_film(*, root, narration_wav, report, timing, scenes, output, ramp=RA
                     if len(frames) == 2:  # Unchanged 0.7 s scene crossfade.
                         frame = Image.blend(frames[0], frames[1], ease((t - items[active[1]]['start']) / overlap))
                     level = min(1, t / style['transitions']['opening_fade_seconds'],
-                                max(0, (duration - t) / style['transitions']['closing_fade_seconds']))
+                                max(0, ease((duration - t) / max(CLOSING_FADE, style['transitions']['closing_fade_seconds']))))
                     if level < 1:
                         frame = Image.blend(Image.new('RGB', (w, h), _colour(style, 'charcoal')), frame, level)
                     ci = bisect.bisect_right(capstarts, t) - 1
@@ -319,7 +324,7 @@ def compose_film(*, root, narration_wav, report, timing, scenes, output, ramp=RA
     write_srt(output.with_suffix('.srt'), captions)
     data = output.read_bytes()
     return {'schema_version': 1, 'composition': 'lean-5-2-3-v2-eased', 'width': w, 'height': h, 'fps': fps,
-            'duration_seconds': duration, 'sha256': hashlib.sha256(data).hexdigest(), 'bytes': len(data),
+            'duration_seconds': duration, 'voice_seconds': voice, 'tail_seconds': TAIL, 'sha256': hashlib.sha256(data).hexdigest(), 'bytes': len(data),
             'crossfade_seconds': overlap, 'ramp_seconds': ramp, 'still_motion': 'eased camera breath (max 5%)', 'caption_count': len(captions),
             'scenes': [{'image_id': i['image_id'], 'start_seconds': i['start'], 'end_seconds': i['end'], 'rule': i['plan']['rule'],
                         'clip_seconds': i['plan']['clip_seconds'], 'parts': [asdict(s) for s in i['plan']['segments']]} for i in items],

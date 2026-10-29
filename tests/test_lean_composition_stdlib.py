@@ -142,7 +142,10 @@ class LeanRenderChecks(unittest.TestCase):
                                               check=True, capture_output=True).stdout)
             video = next(s for s in probe['streams'] if s['codec_type'] == 'video')
             self.assertEqual((video['width'], video['height']), (1080, 1920))
-            self.assertTrue(math.isclose(manifest['duration_seconds'], duration))
+            self.assertTrue(math.isclose(manifest['duration_seconds'], duration + 2.0))  # Last painting lingers 2 s after the voice.
+            self.assertTrue(math.isclose(manifest['voice_seconds'], duration))
+            audio_stream = next(s for s in probe['streams'] if s['codec_type'] == 'audio')
+            self.assertGreater(float(audio_stream['duration']), duration + 1.8)  # Silence padded, not cut at the last word.
 
 
 if __name__ == '__main__': unittest.main()
