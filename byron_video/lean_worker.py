@@ -281,7 +281,8 @@ def build_pipeline(config, check, workspace, *, credential_bundle=None, sdk_fact
         ledger_factory=lambda job_id: LeanLedger(firestore_client, **dbargs, owner_id=owner, job_id=job_id, budget=config['budget']),
         uploads=CloudUploadStore(storage_client, bucket=bucket), objects=LeanObjects(storage_client, bucket=bucket),
         response_factory=lambda job_id: CloudProviderResponseStore(storage_client, bucket=bucket, owner=Principal(owner), job_id=job_id),
-        narration_transport=ElevenLabsHTTPTransport(lambda: keys('elevenlabs'), enabled=True, client_factory=http_client_factory),
+        narration_transport=ElevenLabsHTTPTransport(lambda: keys('elevenlabs'), enabled=True, client_factory=http_client_factory,
+                                                    timeout_seconds=180),  # A ~3,000-character story can take a minute or more.
         motion_transport=FalQueueTransport(lambda: keys('fal'), enabled=True, client_factory=http_client_factory),
         ffmpeg_version=config['runtime']['ffmpeg_version'], workspace=workspace, activation_check=check)
 

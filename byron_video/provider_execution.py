@@ -141,7 +141,9 @@ class ElevenLabsHTTPTransport:
             key = self._key_reader()
             if not isinstance(key,str) or not 16 <= len(key) <= 512 or not key.isascii() or any(c.isspace() for c in key):
                 raise ValueError()
-            with factory(timeout=min(10,self._timeout), follow_redirects=False, trust_env=False) as client, _wall_deadline(client,self._timeout,self._clock) as check_deadline:
+            # ElevenLabs sends nothing until the whole span is recorded (tens of seconds for a long
+            # story), so the socket wait must cover the full bounded budget, not a short idle limit.
+            with factory(timeout=self._timeout, follow_redirects=False, trust_env=False) as client, _wall_deadline(client,self._timeout,self._clock) as check_deadline:
                 if submission_check is not None and submission_check() is not True:raise ValueError('Final narration authorization unavailable.')
                 with client.stream('POST',request['url'],headers={'xi-api-key':key,'Accept':'application/json','Accept-Encoding':'identity'},json=request['body']) as response:
                     # No automatic retry, even for 429/5xx or ambiguous redirect.

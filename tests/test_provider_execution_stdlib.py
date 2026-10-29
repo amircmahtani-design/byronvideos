@@ -147,7 +147,7 @@ class ProviderExecutionChecks(unittest.TestCase):
         transport=ElevenLabsHTTPTransport(lambda:'synthetic-key-never-live',enabled=True,client_factory=factory)
         wire=transport(self.requests[0])
         self.assertEqual(wire,response(self.text))
-        self.assertEqual(options,[dict(timeout=10,follow_redirects=False,trust_env=False)])
+        self.assertEqual(options,[dict(timeout=90,follow_redirects=False,trust_env=False)])  # Whole-span wait, not a 10 s idle limit.
         self.assertEqual(len(calls),1)
         self.assertEqual(calls[0][1]['json'],self.requests[0]['body'])
         self.assertNotIn('synthetic-key-never-live',repr(transport))
