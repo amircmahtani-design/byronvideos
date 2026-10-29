@@ -1,10 +1,10 @@
 import {exactCheckpoint,persistExact,exactFilmAction,exactActionResolved} from './exact-film.mjs';
-import {MAX_SCRIPT_CHARACTERS, countWords, validateScript, validateImages, moveItem, safeJobId, safeDownloadURL, displayProgress, isPrivateDraft, completedFilmNote, refreshVoiceState, voiceLabel} from './core.mjs';
+import {MAX_SCRIPT_CHARACTERS, countWords, validateScript, validateImages, moveItem, safeJobId, safeDownloadURL, displayProgress, isPrivateDraft, completedFilmNote, refreshVoiceState, voiceLabel, skipNote} from './core.mjs';
 
 import {hostedCapability, freezeSubmission, submitHosted, persistPending, persistHostedJob, recoverSubmission, resumeCheckpoint, persistResume, resumeResolved, resumeHosted} from './hosted.mjs';
 
 const $ = id => document.getElementById(id);
-const ui = Object.fromEntries(['exact-actions','exact-note','approve-film','renew-preview','renew-clean','clean-download','check-exact','voice','refresh-voices','voice-status','creator','inputs','script','script-count','images','paintings','empty-images','convert','connection','reconnect','error','job','job-title','job-message','job-note','progress','download','new-film','resume','resume-film','prototype-title','prototype-copy','studio-status','retry-upload'].map(id => [id, $(id)]));
+const ui = Object.fromEntries(['exact-actions','exact-note','approve-film','renew-preview','renew-clean','clean-download','check-exact','voice','refresh-voices','voice-status','creator','inputs','script','script-count','images','paintings','empty-images','convert','connection','reconnect','error','job','job-title','job-message','job-note','progress','download','new-film','resume','resume-film','prototype-title','prototype-copy','studio-status','retry-upload','script-skips'].map(id => [id, $(id)]));
 let paintings = [];
 let ready = false;
 let activeJob = null;
@@ -70,6 +70,7 @@ function updateConvert() { ui.convert.disabled = !ready || busy; }
 function updateCount() {
   const words = countWords(ui.script.value);
   ui['script-count'].textContent = `${words.toLocaleString()} ${words === 1 ? 'word' : 'words'} · ${ui.script.value.length.toLocaleString()} / ${MAX_SCRIPT_CHARACTERS.toLocaleString()} characters`;
+  ui['script-skips'].textContent = skipNote(ui.script.value);
 }
 function showPaintings() {
   ui.paintings.replaceChildren();

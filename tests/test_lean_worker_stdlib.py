@@ -9,7 +9,7 @@ from pathlib import Path
 
 from byron_video.elevenlabs_adapter import fingerprint
 from byron_video.lean_film import LeanJobStore, LeanLedger
-from byron_video.lean_worker import LeanPipeline, explain, motion_anchor
+from byron_video.lean_worker import LeanPipeline, explain, motion_anchor, with_bounds
 from byron_video.provider_execution import FileResponseStore, WireResponse, execute_narration_once
 from test_cloud_journal_stdlib import Client, PROJECT
 from test_hosted_uploads_stdlib import image_bytes
@@ -146,6 +146,14 @@ class LeanWorkerChecks(unittest.TestCase):
                 message = explain('narration' if provider == 'elevenlabs' else 'animation', outcome)
                 self.assertIn(words, message); self.assertIn(code, message); self.assertLessEqual(len(message), 300)
                 self.assertIn('ElevenLabs' if provider == 'elevenlabs' else '(fal)', message)
+
+    def test_placement_bounds_keep_crossfades_and_order(self):
+        timing = {'duration_seconds': 40.0, 'crossfade_seconds': .7, 'scenes': [
+            {'image_id': f'painting_{i}', 'start_seconds': 0, 'end_seconds': 0} for i in range(1, 5)]}
+        placed = with_bounds(timing, [0.0, 6.0, 20.0, 31.0, 40.0])
+        self.assertEqual([(s['start_seconds'], s['end_seconds']) for s in placed['scenes']],
+                         [(0, 6.35), (5.65, 20.35), (19.65, 31.35), (30.65, 40.0)])
+        self.assertEqual([s['image_id'] for s in placed['scenes']], [s['image_id'] for s in timing['scenes']])
 
     def test_small_original_is_the_exact_anchor(self):
         data = image_bytes(1)

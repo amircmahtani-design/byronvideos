@@ -1,20 +1,20 @@
 """Lean "5/2/3" portrait composition: animated clip parts around the original still.
 
-Scene rule (scene length D from the narration split, clip length L ≈ 10 s, fade X = 0.8 s):
-  D >= 12 s       full:         clip 0–5 s at the scene start, clip 5–7 s centred on D/2,
-                                clip 7–L s ending exactly at the scene end.
-  8 <= D < 12 s   two_part:     clip 0–5 s at the start and clip 7–L s ending at the scene end.
-  D < 8 s         opening_only: clip 0–a s at the start, a = min(5, max(D − 2X, min(D, X))),
-                                then the still until the scene end.
-Between clip parts the ORIGINAL painting is shown with a slow drift (zoom + pan) whose
-size follows sin², so it starts and ends at the exact original framing with zero speed.
-Clip parts fade X seconds into and out of the still, except the scene's first part (clip
-t=0 is the original, so it starts directly) and a part that ends with the scene (clip
-t=L is the original again, and the 0.7 s scene crossfade follows). A later part never
-overlaps an earlier one; if it would, it starts later in the clip. Clip frames are read
-once, forward only: no rewind, loop or retime beyond conversion to the 24 fps canvas.
-Every clip/still join is measured (mean absolute grey difference, 0–255) and recorded;
-joins above the threshold are flagged, never failed.
+Scene rule (scene length D from the narration split, clip length L ≈ 10 s, ramp R = 1.5 s):
+  D >= 15 s         full:         clip 0–5 s at the scene start, clip 5–7 s centred on D/2,
+                                  clip 7–L s ending exactly at the scene end.
+  10.5 <= D < 15 s  two_part:     clip 0–5 s at the start and clip 7–L s ending at the scene end.
+  D < 10.5 s        opening_only: clip 0–a s at the start, then the still until the scene end.
+Wherever a part meets the still, the motion never stops or starts abruptly: over R seconds
+its playback speed eases smoothly to zero (or up from zero) while it dissolves into (or out
+of) the still, so the subject settles into the painting. A ramp of R output seconds uses
+R/2 clip seconds, so a part lasts (clip span) + (ramps)/2. Where a part's clip end is the
+original painting (clip t=0 starts the scene; clip t=L ends it) no ramp is needed.
+Between parts the ORIGINAL painting is shown perfectly still: no zoom, pan or drift.
+A later part never overlaps an earlier one; if it would, it starts later in the clip.
+Clip frames are read forward only (no rewind or loop); slowed frames are blended between
+neighbouring source frames instead of repeated. Every clip/still join is measured (mean
+absolute grey difference, 0–255) and recorded; joins above the threshold are flagged.
 """
 import bisect
 from dataclasses import asdict, dataclass
@@ -32,15 +32,10 @@ from PIL import Image, ImageChops, ImageOps, ImageStat
 from .engine import _colour, _font, draw_caption, make_captions, wrap_caption, write_srt
 from .portrait_composition import input_options, presentation, run, run_bounded, validate_words
 
-FADE = 0.8
-FULL_SCENE = 12.0
-TWO_PART_SCENE = 8.0
-ZOOM_RATE = 0.004  # Zoom amplitude per second of still window: slow by construction.
-MAX_ZOOM = 0.05
-PAN = 0.8  # Fraction of the zoom margin used for panning; keeps the frame inside the painting.
-DIRECTIONS = ((1, -1), (-1, -1), (1, 1), (-1, 1))
+RAMP = 1.5
+FULL_SCENE = 15.0
+TWO_PART_SCENE = 10.5
 JOIN_SIZE = (135, 240)
-STILL_SCALE = 1.5
 
 
 def require(ok, message):
@@ -53,49 +48,69 @@ def ease(p):
     return p * p * (3 - 2 * p)
 
 
+def eased_distance(p):
+    """Clip seconds covered (per ramp second) after p of a speed ramp 0→1 that follows ease()."""
+    p = min(1., max(0., p))
+    return p ** 3 - p ** 4 / 2  # Integral of 3p² − 2p³; reaches 0.5 at p = 1.
+
+
 @dataclass(frozen=True)
 class Segment:
     at: float
     clip_from: float
     clip_to: float
-    fade_in: float
-    fade_out: float
+    ramp_in: float
+    ramp_out: float
+
+    @property
+    def length(self):
+        return self.clip_to - self.clip_from + (self.ramp_in + self.ramp_out) / 2
 
     @property
     def end(self):
-        return self.at + self.clip_to - self.clip_from
+        return self.at + self.length
+
+    def clip_time(self, local):
+        """Clip seconds shown at `local` output seconds into the part: eased in and out, never backwards."""
+        if self.ramp_in and local < self.ramp_in:
+            return self.clip_from + self.ramp_in * eased_distance(local / self.ramp_in)
+        left = self.length - local
+        if self.ramp_out and left < self.ramp_out:
+            return self.clip_to - self.ramp_out * eased_distance(left / self.ramp_out)
+        return self.clip_from + self.ramp_in / 2 + (local - self.ramp_in)
 
 
-def scene_plan(duration, clip_seconds=10.0, fade=FADE):
-    D, L, X = float(duration), float(clip_seconds), float(fade)
-    require(math.isfinite(D) and D > 0 and math.isfinite(L) and 7.5 <= L <= 12 and 0 < X <= 2, 'Invalid scene or clip timing.')
+def scene_plan(duration, clip_seconds=10.0, ramp=RAMP):
+    D, L, R = float(duration), float(clip_seconds), float(ramp)
+    require(math.isfinite(D) and D > 0 and math.isfinite(L) and 7.5 <= L <= 12 and 0 < R <= 3, 'Invalid scene or clip timing.')
+    tail = (L - 7) + R / 2  # Output length of the final part (clip 7–L, eased in only).
     if D >= FULL_SCENE:
-        rule, parts = 'full', [(0., 0., 5.), (D / 2 - 1, 5., 7.), (D - (L - 7), 7., L)]
+        rule = 'full'
+        parts = [(0., 0., 5., 0., R), (D / 2 - (2 + R) / 2, 5., 7., R, R), (D - tail, 7., L, R, 0.)]
     elif D >= TWO_PART_SCENE:
-        rule, parts = 'two_part', [(0., 0., 5.), (D - (L - 7), 7., L)]
+        rule, parts = 'two_part', [(0., 0., 5., 0., R), (D - tail, 7., L, R, 0.)]
     else:
-        rule, parts = 'opening_only', [(0., 0., min(5., max(D - 2 * X, min(D, X))))]
+        r = min(R, 0.4 * D)
+        a = max(r / 2, min(5., D - r / 2 - min(1., 0.2 * D)))
+        rule, parts = 'opening_only', [(0., 0., a, 0., r)]
     segments, previous = [], 0.
-    for index, (at, start, stop) in enumerate(parts):
+    for at, start, stop, ramp_in, ramp_out in parts:
         if at < previous:  # Start later in the clip instead of overlapping; order is kept.
             start, at = start + previous - at, previous
-        length = stop - start
-        require(length > 1e-6, 'The scene is too short for its clip part.')
-        ends_scene = at + length >= D - 1e-6
-        fade_in = 0. if index == 0 else min(X, length / 2)
-        fade_out = 0. if ends_scene else min(X, length if index == 0 else length / 2)
-        segments.append(Segment(at, start, stop, fade_in, fade_out))
-        previous = at + length
+        require(stop - start >= (ramp_in + ramp_out) / 2 - 1e-9 and stop > start, 'The scene is too short for its clip part.')
+        segment = Segment(at, start, stop, ramp_in, ramp_out)
+        segments.append(segment)
+        previous = segment.end
     require(previous <= D + 1e-6, 'Clip parts exceed the scene.')
-    return {'rule': rule, 'duration': D, 'clip_seconds': L, 'fade': X, 'segments': segments}
+    return {'rule': rule, 'duration': D, 'clip_seconds': L, 'ramp': R, 'segments': segments}
 
 
 def still_windows(plan):
     segments = plan['segments']
-    windows = [(a.end - a.fade_out, b.at + b.fade_in) for a, b in zip(segments, segments[1:])]
+    windows = [(a.end - a.ramp_out, b.at + b.ramp_in) for a, b in zip(segments, segments[1:])]
     last = segments[-1]
     if last.end < plan['duration'] - 1e-6:
-        windows.append((last.end - last.fade_out, plan['duration']))
+        windows.append((last.end - last.ramp_out, plan['duration']))
     return windows
 
 
@@ -104,36 +119,19 @@ def state_at(plan, t):
     for index, s in enumerate(plan['segments']):
         if s.at - 1e-9 <= t < s.end:
             local, alpha = t - s.at, 1.
-            if s.fade_in:
-                alpha = min(alpha, ease(local / s.fade_in))
-            if s.fade_out:
-                alpha = min(alpha, ease((s.end - t) / s.fade_out))
-            return index, s.clip_from + local, alpha
+            if s.ramp_in:
+                alpha = min(alpha, ease(local / s.ramp_in))
+            if s.ramp_out:
+                alpha = min(alpha, ease((s.end - t) / s.ramp_out))
+            return index, s.clip_time(local), alpha
     return None, None, 0.
 
 
-def drift_at(plan, t, index):
-    """(zoom, x, y) for the still; exactly (1, 0, 0) at both ends of each window."""
-    for start, stop in still_windows(plan):
-        if stop > start and start <= t <= stop:
-            e = math.sin(math.pi * (t - start) / (stop - start)) ** 2
-            dx, dy = DIRECTIONS[index % len(DIRECTIONS)]
-            return 1 + min(MAX_ZOOM, ZOOM_RATE * (stop - start)) * e, dx * e, dy * e
-    return 1., 0., 0.
-
-
-def still_base(path, width, height, scale=STILL_SCALE):
-    """Cover-crop (centre protected) the original, oversampled for a sharp drift."""
+def still_frame(path, size):
+    """The original painting, cover-cropped (centre protected); shown perfectly still."""
     with Image.open(path) as image:
         image = ImageOps.exif_transpose(image).convert('RGB')
-        return ImageOps.fit(image, (round(width * scale), round(height * scale)), method=Image.Resampling.LANCZOS, centering=(.5, .5))
-
-
-def still_frame(base, size, zoom=1., x=0., y=0.):
-    bw, bh = base.size
-    cw, ch = bw / zoom, bh / zoom
-    left, top = (bw - cw) / 2 * (1 + PAN * x), (bh - ch) / 2 * (1 + PAN * y)
-    return base.resize(size, Image.Resampling.BICUBIC, box=(left, top, left + cw, top + ch))
+        return ImageOps.fit(image, size, method=Image.Resampling.LANCZOS, centering=(.5, .5))
 
 
 def frame_difference(a, b, size=JOIN_SIZE):
@@ -154,7 +152,8 @@ def clip_seconds(path):
 class ClipReader:
     """Forward-only cover-cropped decode at the canvas rate; EOF holds at most 2 frames."""
     def __init__(self, path, width, height, fps):
-        self.size, self.dimensions, self.index, self.frame = width * height * 3, (width, height), -1, None
+        self.size, self.dimensions, self.index, self.frame, self.previous = width * height * 3, (width, height), -1, None, None
+        self.fps = fps
         self.errors = tempfile.TemporaryFile()
         vf = f'fps={fps},scale={width}:{height}:force_original_aspect_ratio=increase:flags=lanczos,crop={width}:{height},setsar=1'
         self.process = subprocess.Popen(['ffmpeg', '-nostdin', '-v', 'error', '-threads', '1', *input_options(path, video=True),
@@ -162,14 +161,25 @@ class ClipReader:
             stdout=subprocess.PIPE, stderr=self.errors)
 
     def at(self, number):
+        if number == self.index - 1 and self.previous is not None:
+            return self.previous.copy()  # Kept only for blending slowed motion; never a rewind.
         require(number >= self.index, 'Clip frames are used once and in order; no rewind or loop.')
         while self.index < number:
             raw = self.process.stdout.read(self.size)
             if len(raw) != self.size:
                 require(self.frame is not None and number - self.index <= 2, 'The clip ended early; no frozen frame substituted.')
                 break
-            self.frame = Image.frombytes('RGB', self.dimensions, raw); self.index += 1
+            self.previous, self.frame = self.frame, Image.frombytes('RGB', self.dimensions, raw); self.index += 1
         return self.frame.copy()
+
+    def sample(self, seconds):
+        """Frame at a (possibly slowed) clip time: blended between the two nearest source frames."""
+        x = max(0., seconds * self.fps)
+        number = math.floor(x + 1e-7); weight = x - number
+        first = self.at(number)
+        if weight < 0.02:
+            return first
+        return Image.blend(first, self.at(number + 1), min(1., weight))
 
     def close(self):
         if self.process.poll() is None:
@@ -181,7 +191,7 @@ class ClipReader:
         self.process.stdout.close(); self.errors.close()
 
 
-def compose_film(*, root, narration_wav, report, timing, scenes, output, fade=FADE, join_threshold=18.0, style=None):
+def compose_film(*, root, narration_wav, report, timing, scenes, output, ramp=RAMP, join_threshold=18.0, style=None):
     """scenes: [{'image_id','original_path','clip_path'}] in the frozen numbered order."""
     started = time.monotonic()
     style = style or presentation()
@@ -204,33 +214,24 @@ def compose_film(*, root, narration_wav, report, timing, scenes, output, fade=FA
         require(scene['image_id'] == item['image_id'], 'Scene order differs from the numbered paintings.')
         length = clip_seconds(item['clip_path'])
         items.append({'image_id': item['image_id'], 'start': scene['start_seconds'], 'end': scene['end_seconds'],
-                      'plan': scene_plan(scene['end_seconds'] - scene['start_seconds'], length, fade),
-                      'base': still_base(item['original_path'], w, h), 'clip': item['clip_path'], 'identity': None})
+                      'plan': scene_plan(scene['end_seconds'] - scene['start_seconds'], length, ramp),
+                      'still': still_frame(item['original_path'], (w, h)), 'clip': item['clip_path']})
     readers, joins = {}, []
-
-    def still(index, local):
-        item = items[index]
-        zoom, x, y = drift_at(item['plan'], local, index)
-        if zoom == 1 and x == 0 and y == 0:
-            if item['identity'] is None:
-                item['identity'] = still_frame(item['base'], (w, h))
-            return item['identity'].copy()
-        return still_frame(item['base'], (w, h), zoom, x, y)
 
     def scene_frame(index, local):
         item = items[index]
         part, clip_time, alpha = state_at(item['plan'], local)
         if part is None:
-            return still(index, local)
+            return item['still'].copy()
         if index not in readers:
             readers[index] = ClipReader(item['clip'], w, h, fps)
-        clip = readers[index].at(math.floor(clip_time * fps + 1e-7))
+        clip = readers[index].sample(clip_time)
         if alpha >= 1:
             return clip
-        background = still(index, local)
+        background = item['still']
         s = item['plan']['segments'][part]
-        into = s.fade_out and s.end - local <= 1 / fps + 1e-9
-        if into or (s.fade_in and local - s.at < 1 / fps - 1e-9):
+        into = s.ramp_out and s.end - local <= 1 / fps + 1e-9
+        if into or (s.ramp_in and local - s.at < 1 / fps - 1e-9):
             difference = frame_difference(clip, background)
             joins.append({'scene': index + 1, 'image_id': item['image_id'], 'part': part + 1,
                           'join': 'clip_to_still' if into else 'still_to_clip', 'scene_seconds': round(local, 3),
@@ -283,9 +284,9 @@ def compose_film(*, root, narration_wav, report, timing, scenes, output, fade=FA
         encoded.replace(output)
     write_srt(output.with_suffix('.srt'), captions)
     data = output.read_bytes()
-    return {'schema_version': 1, 'composition': 'lean-5-2-3-v1', 'width': w, 'height': h, 'fps': fps,
+    return {'schema_version': 1, 'composition': 'lean-5-2-3-v2-eased', 'width': w, 'height': h, 'fps': fps,
             'duration_seconds': duration, 'sha256': hashlib.sha256(data).hexdigest(), 'bytes': len(data),
-            'crossfade_seconds': overlap, 'fade_seconds': fade, 'caption_count': len(captions),
+            'crossfade_seconds': overlap, 'ramp_seconds': ramp, 'still_motion': 'none', 'caption_count': len(captions),
             'scenes': [{'image_id': i['image_id'], 'start_seconds': i['start'], 'end_seconds': i['end'], 'rule': i['plan']['rule'],
                         'clip_seconds': i['plan']['clip_seconds'], 'parts': [asdict(s) for s in i['plan']['segments']]} for i in items],
             'joins': joins, 'join_threshold': join_threshold, 'flagged_joins': sum(j['flagged'] for j in joins),

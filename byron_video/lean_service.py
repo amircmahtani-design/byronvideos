@@ -16,7 +16,8 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.datastructures import UploadFile
 
 from .elevenlabs_adapter import plan_requests
-from .engine import narration_text, validate_script
+from .engine import validate_script
+from .spoken_text import prepare_story
 from .hosted_control import (IdempotencyConflict, JOB_ID, SAFE_ID, PrivateControlMiddleware, Submission, VerifiedImage,
                              digest, invoke, require)
 from .hosted_uploads import KEY, MAX_IMAGE_BYTES, batch_fingerprint, prepare_image
@@ -125,7 +126,10 @@ def install_lean_routes(app, *, access, owner_id, config, settings, jobs, ledger
             validate_script(body.script)
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from None
-        text = narration_text(body.script)
+        try:
+            text, _ = prepare_story(body.script)  # Title and web links are never read aloud or captioned.
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from None
         try:
             voices = library.read()
         except Exception:

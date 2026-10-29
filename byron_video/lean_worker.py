@@ -26,6 +26,7 @@ from .hosted_control import JOB_ID, Principal, VerifiedImage, canonical, require
 from .lean_film import (LeanBudgetExceeded, LeanJobStore, LeanLedger, LeanObjects, lean_activation, lean_settings,
                         motion_approval, motion_cents, motion_operation, narration_approval, owner_for)
 from .provider_execution import ProviderOutcomeUnknown, plan_anchored_motion, submit_motion_once
+from .scene_placement import place
 
 AUDIO = {'integrated_lufs': -16, 'true_peak_dbfs': -1, 'lra': 11}
 ANCHOR_BYTES = 4 * 1024 * 1024
@@ -108,16 +109,26 @@ def sha(data):
     return hashlib.sha256(data).hexdigest()
 
 
+def with_bounds(timing, bounds, overlap=0.35):
+    """Same scene layout as narration_timing (0.7 s crossfades), at the chosen boundaries."""
+    last = len(timing['scenes']) - 1
+    scenes = [{**scene, 'start_seconds': 0 if i == 0 else bounds[i] - overlap,
+               'end_seconds': timing['duration_seconds'] if i == last else bounds[i + 1] + overlap}
+              for i, scene in enumerate(timing['scenes'])]
+    return {**timing, 'scenes': scenes, 'source': 'painting_placement'}
+
+
 class LeanPipeline:
     def __init__(self, *, owner_id, jobs, ledger_factory, uploads, objects, response_factory, narration_transport,
                  motion_transport, ffmpeg_version, workspace, activation_check=lambda: True, narrate=narrate, compose=compose,
                  timing=narration_timing, sleep=time.sleep, clock=time.monotonic, poll_seconds=5,
-                 motion_deadline_seconds=1200, read_failures=6):
+                 motion_deadline_seconds=1200, read_failures=6, placer=None):
         self.owner, self.jobs, self.ledger_factory, self.uploads, self.objects = owner_id, jobs, ledger_factory, uploads, objects
         self.response_factory, self.narration, self.motion = response_factory, narration_transport, motion_transport
         self.ffmpeg_version, self.workspace, self.check = ffmpeg_version, Path(workspace), activation_check
         self.narrate, self.compose, self.timing, self.sleep, self.clock = narrate, compose, timing, sleep, clock
         self.poll, self.deadline, self.read_failures = poll_seconds, motion_deadline_seconds, read_failures
+        self.placer = placer
 
     def run(self, job_id):
         require(isinstance(job_id, str) and bool(JOB_ID.fullmatch(job_id)), 'Invalid film reference.')
@@ -169,13 +180,23 @@ class LeanPipeline:
                     'narrated_text': inputs['narrated_text'], 'processing_plan': {'narration_profile': inputs['narration_profile']}}
         timing, _ = self.timing(SimpleNamespace(snapshot=snapshot), report, {x['id']: {} for x in inputs['images']})
         scenes = [{'image_id': x['id'], 'original_path': self._original(x, root), 'clip_path': clips[x['position']]} for x in inputs['images']]
+        placement = {'method': 'paragraphs'}
+        if self.placer is not None and inputs['settings'].get('painting_placement', 'gemini') == 'gemini':
+            # Each painting appears when the story reaches it; any failure keeps the paragraph split.
+            bounds, detail = self.placer(text=inputs['narrated_text'], words=report['words'], duration=report['duration_seconds'],
+                                         paintings=[Path(s['original_path']).read_bytes() for s in scenes])
+            if bounds:
+                timing = with_bounds(timing, bounds); placement = detail
+            else:
+                placement = {'method': 'paragraphs', 'fallback': detail}
+            print(json.dumps({'job_id': job.id, 'placement': placement}), file=sys.stderr)
         output = root / 'film' / 'film.mp4'
         manifest = self.compose(root=root, narration_wav=audio, report=report, timing=timing, scenes=scenes, output=output,
                                 join_threshold=inputs['settings']['join_difference_threshold'])
         self.stage = 'saving'
         self._progress(job, 95, 'Saving your film…')
         video = self.objects.put_file(self.owner, job.id, 'film', output, 'video/mp4')
-        saved = self.objects.put(self.owner, job.id, 'film-manifest', canonical({**manifest, 'timing': timing}).encode(), 'application/json')
+        saved = self.objects.put(self.owner, job.id, 'film-manifest', canonical({**manifest, 'timing': timing, 'placement': placement}).encode(), 'application/json')
         self.check()
         return self.jobs.complete(self.owner, job.id, {'video': video, 'manifest': saved, 'duration_seconds': manifest['duration_seconds'],
                                                        'flagged_joins': manifest.get('flagged_joins', 0), 'joins': manifest.get('joins', [])})
@@ -321,7 +342,8 @@ def build_pipeline(config, check, workspace, *, credential_bundle=None, sdk_fact
         narration_transport=ElevenLabsHTTPTransport(lambda: keys('elevenlabs'), enabled=True, client_factory=http_client_factory,
                                                     timeout_seconds=180),  # A ~3,000-character story can take a minute or more.
         motion_transport=FalQueueTransport(lambda: keys('fal'), enabled=True, client_factory=http_client_factory),
-        ffmpeg_version=config['runtime']['ffmpeg_version'], workspace=workspace, activation_check=check)
+        ffmpeg_version=config['runtime']['ffmpeg_version'], workspace=workspace, activation_check=check,
+        placer=lambda **kw: place(project=project, token=credentials.token_reader, client_factory=http_client_factory, **kw))
 
 
 def main(argv=None, *, environ=None):

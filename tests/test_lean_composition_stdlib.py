@@ -11,7 +11,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from byron_video.lean_composition import (FADE, drift_at, frame_difference, scene_plan, state_at, still_frame, still_windows)
+from byron_video.lean_composition import (RAMP, frame_difference, scene_plan, state_at, still_frame, still_windows)
 
 
 def parts(plan):
@@ -24,67 +24,65 @@ class SceneRuleChecks(unittest.TestCase):
         for s in plan['segments']:
             self.assertGreaterEqual(s.at, previous_end - 1e-9)  # No overlap between parts.
             self.assertGreaterEqual(s.clip_from, previous_clip - 1e-9)  # Clip frames forward only, used once.
+            times = [s.clip_time(s.length * i / 200) for i in range(201)]
+            self.assertTrue(all(b >= a - 1e-9 for a, b in zip(times, times[1:])))  # Never backwards.
+            self.assertAlmostEqual(times[0], s.clip_from); self.assertAlmostEqual(times[-1], s.clip_to)
             previous_end, previous_clip = s.end, s.clip_to
         self.assertLessEqual(previous_end, plan['duration'] + 1e-9)
 
     def test_full_rule_places_5_2_3_at_start_middle_and_end(self):
         plan = scene_plan(20, 10)
         self.assertEqual(plan['rule'], 'full')
-        self.assertEqual(parts(plan), [(0, 0, 5), (9, 5, 7), (17, 7, 10)])
+        self.assertEqual(parts(plan), [(0, 0, 5), (8.25, 5, 7), (16.25, 7, 10)])
         first, middle, last = plan['segments']
-        self.assertEqual((first.fade_in, first.fade_out), (0, FADE))  # Direct start: clip t=0 is the original.
-        self.assertEqual((middle.fade_in, middle.fade_out), (FADE, FADE))
-        self.assertEqual((last.fade_in, last.fade_out), (FADE, 0))  # Ends with the scene into the 0.7 s crossfade.
-        self.assertAlmostEqual(last.end, 20)
+        self.assertEqual((first.ramp_in, first.ramp_out), (0, RAMP))  # Direct start: clip t=0 is the original.
+        self.assertEqual((middle.ramp_in, middle.ramp_out), (RAMP, RAMP))
+        self.assertEqual((last.ramp_in, last.ramp_out), (RAMP, 0))  # Clip t=L is the original; scene crossfade follows.
+        self.assertAlmostEqual(last.end, 20); self.assertAlmostEqual(middle.at + middle.length / 2, 10)
         self.assert_forward_once(plan)
-        self.assertEqual(scene_plan(12, 10)['rule'], 'full')
+        self.assertEqual(scene_plan(15, 10)['rule'], 'full')
 
     def test_short_scene_rules(self):
-        plan = scene_plan(10, 10)
-        self.assertEqual(plan['rule'], 'two_part'); self.assertEqual(parts(plan), [(0, 0, 5), (7, 7, 10)])
-        self.assertEqual(scene_plan(11.99, 10)['rule'], 'two_part'); self.assertEqual(scene_plan(8, 10)['rule'], 'two_part')
+        plan = scene_plan(12, 10)
+        self.assertEqual(plan['rule'], 'two_part'); self.assertEqual(parts(plan), [(0, 0, 5), (8.25, 7, 10)])
+        self.assertEqual(scene_plan(14.99, 10)['rule'], 'two_part'); self.assertEqual(scene_plan(10.5, 10)['rule'], 'two_part')
         plan = scene_plan(6, 10)
-        self.assertEqual(plan['rule'], 'opening_only'); self.assertEqual(parts(plan), [(0, 0, 4.4)])
-        self.assertEqual(plan['segments'][0].fade_out, FADE)
-        self.assertEqual([(round(a, 6), round(b, 6)) for a, b in still_windows(plan)], [(3.6, 6)])
-        self.assertEqual(parts(scene_plan(7.99, 10)), [(0, 0, 5)])
-        tiny = scene_plan(0.5, 10)
-        self.assertEqual(parts(tiny), [(0, 0, 0.5)]); self.assertEqual(tiny['segments'][0].fade_out, 0)
-        for duration in (0.5, 3, 6, 7.99, 8, 9.3, 11.99, 12, 15, 30, 61):
+        self.assertEqual(plan['rule'], 'opening_only'); self.assertEqual(plan['segments'][0].ramp_out, 1.5)
+        self.assertLessEqual(plan['segments'][0].end, 6)
+        for duration in (0.5, 3, 6, 7.99, 8, 9.3, 10.49, 10.5, 12, 14.99, 15, 30, 61):
             self.assert_forward_once(scene_plan(duration, 10))
+            self.assert_forward_once(scene_plan(duration, 12))
 
     def test_longer_clip_never_overlaps_or_rewinds(self):
-        plan = scene_plan(8, 10.2)
-        self.assertEqual(parts(plan)[1][0], 5.0)
-        self.assertAlmostEqual(plan['segments'][1].clip_from, 7.2)
+        plan = scene_plan(10.5, 12)
+        self.assertGreater(plan['segments'][1].clip_from, 7)  # Starts later in the clip instead of overlapping.
         self.assert_forward_once(plan)
         with self.assertRaises(ValueError): scene_plan(10, 6)
         with self.assertRaises(ValueError): scene_plan(float('nan'), 10)
 
-    def test_crossfades_and_eased_drift(self):
+    def test_motion_eases_to_rest_while_dissolving_into_the_still(self):
         plan = scene_plan(20, 10)
         self.assertEqual(state_at(plan, 0), (0, 0, 1.))
-        part, clip, alpha = state_at(plan, 5 - FADE / 2)
-        self.assertEqual(part, 0); self.assertAlmostEqual(clip, 4.6); self.assertTrue(0 < alpha < 1)
-        self.assertEqual(state_at(plan, 6), (None, None, 0.))
-        self.assertEqual(state_at(plan, 9)[2], 0.)  # Middle part fades in from the still.
-        self.assertAlmostEqual(state_at(plan, 19.99)[1], 9.99)
-        for start, stop in still_windows(plan):
-            self.assertEqual(drift_at(plan, start, 0), (1., 0., 0.))
-            zoom, x, y = drift_at(plan, stop, 0)
-            self.assertAlmostEqual(zoom, 1); self.assertAlmostEqual(x, 0); self.assertAlmostEqual(y, 0)
-            zoom, x, y = drift_at(plan, (start + stop) / 2, 0)
-            self.assertTrue(1 < zoom <= 1.05 and x != 0 and y != 0)
-            near = drift_at(plan, start + 0.01, 0)[0] - 1
-            self.assertLess(near, 1e-5)  # Eased: no abrupt start of motion.
+        first = plan['segments'][0]
+        part, clip, alpha = state_at(plan, first.end - RAMP / 2)
+        self.assertEqual(part, 0); self.assertTrue(4.5 < clip < 5 and 0 < alpha < 1)
+        step = 1 / 24  # Playback speed (clip seconds per output second) falls smoothly towards zero.
+        speeds = [(first.clip_time(u + step) - first.clip_time(u)) / step for u in (first.length - RAMP, first.length - RAMP / 2, first.length - step)]
+        self.assertAlmostEqual(speeds[0], 1, places=2); self.assertTrue(speeds[0] > speeds[1] > speeds[2]); self.assertLess(speeds[2], 0.05)
+        self.assertEqual(state_at(plan, 7), (None, None, 0.))  # Perfectly still painting between parts.
+        middle = plan['segments'][1]
+        self.assertEqual(state_at(plan, middle.at)[2], 0.)  # Middle part wakes up from the still.
+        self.assertAlmostEqual(state_at(plan, 19.999)[1], 10, places=2)
+        self.assertEqual(len(still_windows(plan)), 2)
 
-    def test_join_difference_metric(self):
-        base = Image.linear_gradient('L').convert('RGB').resize((270, 480))
-        self.assertEqual(frame_difference(base, base.copy()), 0)
-        self.assertGreater(frame_difference(base, Image.new('RGB', (270, 480), 'white')), 20)
-        frame = still_frame(base, (135, 240))
-        self.assertEqual(frame.size, (135, 240)); self.assertLess(frame_difference(frame, base), 2)
-        self.assertGreater(frame_difference(still_frame(base, (135, 240), 1.05, 1, -1), frame), 0)
+    def test_join_difference_metric_and_still_is_the_original(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / 'painting.png'
+            base = Image.linear_gradient('L').convert('RGB').resize((270, 480)); base.save(path)
+            self.assertEqual(frame_difference(base, base.copy()), 0)
+            self.assertGreater(frame_difference(base, Image.new('RGB', (270, 480), 'white')), 20)
+            frame = still_frame(path, (135, 240))
+            self.assertEqual(frame.size, (135, 240)); self.assertLess(frame_difference(frame, base), 2)
 
 
 def tool(name):

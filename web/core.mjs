@@ -29,6 +29,30 @@ export function countWords(text) {
   return text.trim() ? text.trim().split(/\s+/u).length : 0;
 }
 
+// Mirrors byron_video/spoken_text.py: the title line and web links are never read aloud.
+const MARKDOWN_LINK = /(?<!!)\[([^\[\]\r\n]+)\]\((https?:\/\/[^\s()]+)\)/gu;
+const WEB_ADDRESS = /(?:https?:\/\/|www\.)\S+/giu;
+export function storySkips(script) {
+  const lines = script.replace(MARKDOWN_LINK, '$1').replace(/\r\n?/gu, '\n').split('\n');
+  const first = lines.findIndex(line => line.trim());
+  let title = null;
+  if (first >= 0) {
+    const line = lines[first].trim(), following = lines[first + 1] || '';
+    if (line.startsWith('#') || (line.split(/\s+/u).length <= 15 && !/[.!?…:;,"'”’)]$/u.test(line) && !following.trim())) {
+      title = line.replace(/^#+/u, '').trim();
+    }
+  }
+  const links = lines.reduce((total, line) => total + (line.match(WEB_ADDRESS) || []).length, 0);
+  return {title, links};
+}
+export function skipNote(script) {
+  const {title, links} = storySkips(script);
+  const parts = [];
+  if (title) parts.push(`the title “${title.length > 60 ? title.slice(0, 57) + '…' : title}”`);
+  if (links) parts.push(links === 1 ? 'one web link' : `${links} web links`);
+  return parts.length ? `Not read aloud or subtitled: ${parts.join(' and ')}.` : '';
+}
+
 export function validateScript(text) {
   if (!text.trim()) return 'Paste the words you want the narrator to read.';
   if (text.length > MAX_SCRIPT_CHARACTERS) return `Your script has ${text.length.toLocaleString()} characters. Please shorten it to ${MAX_SCRIPT_CHARACTERS.toLocaleString()} or fewer; nothing has been removed.`;
