@@ -127,6 +127,15 @@ class LeanFilmChecks(unittest.TestCase):
         self.assertTrue(b.fund('lean_' + 'b' * 32, 'e' * 64, {'motion_' + '3' * 64: 300, 'motion_' + '4' * 64: 100}))
         self.assertEqual(budget.remaining_cents(self.config['budget']), 0)
 
+    def test_full_length_story_read_sentence_by_sentence_is_reserved_and_funded(self):
+        # The live failure: ~70 sentence requests broke a 64-operation ledger limit. Use far more.
+        config = lean_config(); config['narration_profile'] = {**config['narration_profile'], 'pacing': 'sentences'}
+        story = '\n\n'.join(' '.join(f'Sentence {p}-{s} is here.' for s in range(5)) for p in range(80))  # 400 sentences, 1,600 words.
+        job, created = self.store().reserve(OWNER, KEY, 'b' * 64, inputs_builder(config, text=story))
+        self.assertTrue(created); self.assertGreater(len(job.inputs['allocations']), 400)
+        ledger = self.ledger(job.id)
+        self.assertTrue(ledger.fund(job.inputs['plan_id'], job.inputs['plan_sha256'], job.inputs['allocations']))
+
     def test_each_paid_call_is_claimed_once_and_uncertain_is_never_resent(self):
         data = image_bytes(1); settings, budget = self.settings, self.config['budget']
         requests = []

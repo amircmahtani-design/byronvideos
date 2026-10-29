@@ -147,6 +147,19 @@ class LeanWorkerChecks(unittest.TestCase):
                 self.assertIn(words, message); self.assertIn(code, message); self.assertLessEqual(len(message), 300)
                 self.assertIn('ElevenLabs' if provider == 'elevenlabs' else '(fal)', message)
 
+    def test_full_length_story_runs_sentence_by_sentence_end_to_end(self):
+        # Full length, as live: one narration request per sentence, every step of the film after it.
+        config = lean_config(); config['narration_profile'] = {**config['narration_profile'], 'pacing': 'sentences'}
+        story = '\n\n'.join(' '.join(f'Sentence {p}-{s} is here.' for s in range(4)) for p in range(30))  # 120 sentences.
+        self.config = config
+        self.job, _ = self.store.reserve(OWNER, 'lean_request_full_length_01', 'c' * 64, inputs_builder(config, text=story))
+        eleven, fal = ElevenLabs(), Fal(); self.compose_fails = False
+        pipeline = self.pipeline(eleven, fal); heard = []
+        pipeline.checker = lambda **kw: (heard.append(kw['text']) or True, {'missing_words': 0})
+        done = pipeline.run(self.job.id)
+        self.assertEqual(done.status, 'complete', done.message)
+        self.assertEqual(eleven.calls, 120); self.assertEqual(len(fal.submitted), 4); self.assertEqual(heard, [story])
+
     def test_skipped_narration_stops_before_any_painting_is_animated(self):
         eleven, fal = ElevenLabs(), Fal()
         pipeline = self.pipeline(eleven, fal)

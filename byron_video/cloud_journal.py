@@ -13,6 +13,8 @@ import secrets
 from .hosted_control import (JobRecord, DispatchReceipt, VerifiedArtifact,
     IdempotencyConflict, canonical, digest, require, SAFE_ID, JOB_ID, SHA256)
 
+MAX_ALLOCATIONS = 480
+
 
 def _safe_owner(owner):
     value = owner.subject if hasattr(owner, 'subject') else owner
@@ -284,7 +286,9 @@ class FirestoreSpendJournal(_FirestoreBoundary):
         """
         require(isinstance(plan_id,str) and bool(SAFE_ID.fullmatch(plan_id))
                 and isinstance(plan_sha256,str) and bool(SHA256.fullmatch(plan_sha256)), 'Invalid plan identity.')
-        require(isinstance(allocations,dict) and 0 < len(allocations) <= 64
+        # Sentence-paced narration makes one operation per sentence: a 16,000-character story can need a
+        # few hundred. 480 keeps the whole plan (one document each, plus 3) inside one 500-write transaction.
+        require(isinstance(allocations,dict) and 0 < len(allocations) <= MAX_ALLOCATIONS
                 and all(isinstance(k,str) and re.fullmatch(r'[A-Za-z0-9_-]{8,100}',k)
                         and type(v) is int and v>0 for k,v in allocations.items()), 'Explicit finite positive allocations required.')
         total=sum(allocations.values())
