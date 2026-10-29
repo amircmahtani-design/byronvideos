@@ -32,6 +32,7 @@ PROFILE_KEYS = {'schema_version', 'version', 'status', 'provider', 'voice_id', '
 # Optional storyteller pacing: one request per sentence, with silences added between them.
 PACING = ('sentences',)
 SENTENCE_END = re.compile(r'[.!?…]+["\'”’)\]]*(?=\s|$)')
+MAX_PACED_REQUESTS = 400  # Leaves room for the paintings within the ledger's 480 operations per film.
 ABBREVIATIONS = {'mr', 'mrs', 'ms', 'dr', 'st', 'mt', 'jr', 'sr', 'prof', 'rev', 'col', 'gen', 'capt', 'lt', 'vs', 'etc', 'no'}
 
 
@@ -61,8 +62,8 @@ def plan_requests(text, profile):
     >10k characters on Multilingual v2 uses preplanned chunks at whitespace.
     This is not a second attempt at the same text. No paid transport is invoked.
     """
-    from .engine import validate_script
-    validate_script(text)
+    from .story_limits import validate_story
+    validate_story(text)
     p = validate_profile(profile)
     limit = MODEL_LIMITS[p['model_id']]
     spans, start = ([], 0) if p.get('pacing') != 'sentences' else (sentence_spans(text, limit), len(text))
@@ -100,7 +101,7 @@ def sentence_spans(text, limit):
     """Contiguous spans, one per sentence (or line), each keeping its trailing whitespace."""
     cuts = set()
     for match in SENTENCE_END.finditer(text):
-        word = re.search(r'([A-Za-z]+)\W*$', text[:match.start() + 1])
+        word = re.search(r'([A-Za-z]+)\W*$', text[max(0, match.start() - 24):match.start() + 1])  # Local look-back only.
         if word and word.group(1).lower() in ABBREVIATIONS and match.group().startswith('.'):
             continue  # "Mr. Mehra" is one sentence.
         cuts.add(re.match(r'\s*', text[match.end():]).end() + match.end())
@@ -113,6 +114,12 @@ def sentence_spans(text, limit):
             start = end
     if start < len(text):  # Trailing whitespace joins the last span.
         spans[-1] = {**spans[-1], 'char_end': len(text), 'text': text[spans[-1]['char_start']:]}
+    if len(spans) > MAX_PACED_REQUESTS:  # A very long story: read a few sentences per request so it always fits.
+        size = -(-len(spans) // MAX_PACED_REQUESTS)
+        groups = [spans[i:i + size] for i in range(0, len(spans), size)]
+        spans = [{'char_start': g[0]['char_start'], 'char_end': g[-1]['char_end'],
+                  'text': text[g[0]['char_start']:g[-1]['char_end']]} for g in groups]
+        require(all(s['char_end'] - s['char_start'] <= limit for s in spans), 'A sentence group exceeds the provider request limit; nothing was cut.')
     return spans
 
 

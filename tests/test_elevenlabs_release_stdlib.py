@@ -39,7 +39,7 @@ class NarrationReleaseChecks(unittest.TestCase):
             payload=json.dumps({'audio_base64':base64.b64encode(self.audio).decode(),'alignment':{
                 'characters':list(text),'character_start_times_seconds':[i*end/n for i in range(n)],
                 'character_end_times_seconds':[(i+1)*end/n for i in range(n)]}}).encode()
-            return WireResponse('synthetic_request_1',payload)
+            return WireResponse(f'synthetic_request_{len(self.calls)}',payload)  # Unique per request, as ElevenLabs gives.
         execute_narration_once(owner_id='fixture_owner',job_id='fixture_job_1',text=self.text,profile=self.profile,
             approval=self.approval,journal=self.journal,transport=transport,response_store=self.archive)
     def build(self,**changes):

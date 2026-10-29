@@ -13,10 +13,11 @@ from fastapi import Header, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
+from pydantic import Field, StrictStr
 from starlette.datastructures import UploadFile
 
 from .elevenlabs_adapter import plan_requests
-from .engine import validate_script
+from .story_limits import STORY_MAX_CHARS, validate_story
 from .spoken_text import prepare_story
 from .hosted_control import (IdempotencyConflict, JOB_ID, SAFE_ID, PrivateControlMiddleware, Submission, VerifiedImage,
                              digest, invoke, require)
@@ -24,6 +25,11 @@ from .hosted_uploads import KEY, MAX_IMAGE_BYTES, batch_fingerprint, prepare_ima
 from .lean_film import LeanBudgetExceeded, LeanBusy, dollars, estimate_cents, freeze_inputs, narration_profile
 
 EXPIRED = 'The studio setup has expired. Ask the owner to renew it; nothing was started or charged.'
+
+
+class LeanSubmission(Submission):
+    """The hosted submission shape with the studio's generous story length (see story_limits)."""
+    script: StrictStr = Field(min_length=1, max_length=STORY_MAX_CHARS)
 
 
 def install_lean_routes(app, *, access, owner_id, config, settings, jobs, ledger_factory, budget_reader, uploads,
@@ -123,7 +129,7 @@ def install_lean_routes(app, *, access, owner_id, config, settings, jobs, ledger
                 raise HTTPException(409, 'This submission key already belongs to a different film.')
             return {'id': existing.id, 'status': existing.status, 'reused': True}
         try:
-            validate_script(body.script)
+            validate_story(body.script)
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from None
         try:
@@ -192,7 +198,7 @@ def install_lean_routes(app, *, access, owner_id, config, settings, jobs, ledger
         return {'id': job.id, 'status': job.status, 'reused': False}
 
     @app.post('/api/jobs', status_code=202)
-    async def submit(request: Request, body: Submission, idempotency_key: str | None = Header(default=None)):
+    async def submit(request: Request, body: LeanSubmission, idempotency_key: str | None = Header(default=None)):
         session = await owner(request)
         if not isinstance(idempotency_key, str) or not KEY.fullmatch(idempotency_key):
             raise HTTPException(422, 'A stable, random Idempotency-Key is required.')

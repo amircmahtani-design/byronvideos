@@ -28,6 +28,22 @@ class PacingChecks(unittest.TestCase):
         self.assertEqual(len(plan_requests(STORY, profile())), 1)  # Without pacing: unchanged single request.
         with self.assertRaises(ValueError): validate_profile({**profile(), 'pacing': 'fast'})
 
+    def test_studio_story_limits_are_generous_and_engine_is_untouched(self):
+        from byron_video import engine
+        from byron_video.story_limits import STORY_MAX_CHARS, STORY_MAX_WORDS, validate_story
+        self.assertEqual((engine.MAX_SCRIPT_CHARS, engine.MAX_SCRIPT_WORDS), (16_000, 2_000))  # Locked; older paths only.
+        long_story = ' '.join(['Sentence.'] * 15_000)  # 15,000 words, ~150,000 characters... trimmed below.
+        long_story = long_story[:STORY_MAX_CHARS]
+        self.assertEqual(validate_story(long_story), long_story)
+        self.assertGreater(len(plan_requests(long_story, {**profile(), 'pacing': 'sentences'})), 0)
+        with self.assertRaises(ValueError): validate_story('x' * (STORY_MAX_CHARS + 1))
+        with self.assertRaises(ValueError): validate_story('word ' * (STORY_MAX_WORDS + 1))
+
+    def test_very_long_story_groups_sentences_to_fit_and_keeps_exact_text(self):
+        story = ' '.join(f'Line {i} ends.' for i in range(1500))  # 1,500 sentences.
+        spans = sentence_spans(story, 10_000)
+        self.assertLessEqual(len(spans), 400); self.assertEqual(''.join(s['text'] for s in spans), story)
+
     def test_pauses_follow_sentences_and_paragraphs(self):
         self.assertEqual(pause_after('A sentence. ', False, 'sentences'), round(RATE * SENTENCE_PAUSE))
         self.assertEqual(pause_after('“I’ve been told.”\n\n', False, 'sentences'), round(RATE * PARAGRAPH_PAUSE))

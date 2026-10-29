@@ -10,8 +10,10 @@ import argparse
 import hashlib
 import io
 import json
+import math
 import os
 from pathlib import Path
+import re
 import secrets
 import sys
 import time
@@ -21,8 +23,8 @@ from types import SimpleNamespace
 from PIL import Image, ImageOps
 
 from .elevenlabs_adapter import fingerprint, plan_requests
-from .generation_coordinator import narration_timing
 from .hosted_control import JOB_ID, Principal, VerifiedImage, canonical, require
+from .narration_media import MAX_SECONDS
 from .lean_film import (LeanBudgetExceeded, LeanJobStore, LeanLedger, LeanObjects, lean_activation, lean_settings,
                         motion_approval, motion_cents, motion_operation, narration_approval, owner_for)
 from .provider_execution import ProviderOutcomeUnknown, plan_anchored_motion, submit_motion_once
@@ -116,6 +118,36 @@ def sha(data):
     return hashlib.sha256(data).hexdigest()
 
 
+def lean_timing(job, report, source_reviews=None):
+    """Scene timing from the narration's word times, like generation_coordinator.narration_timing
+    (paragraphs when they match the paintings, else sentence ends near equal shares) but for narrations
+    of any length up to MAX_SECONDS. That module and its validator are fingerprint-locked to 15 minutes."""
+    frozen = job.snapshot; images = frozen['images']; text = frozen['narrated_text']
+    duration, words, count = report['duration_seconds'], report['words'], len(images)
+    require(report.get('exact_text') == text and report.get('media_verified') is True, 'Timing requires the exact verified narration.')
+    require(type(duration) in (int, float) and math.isfinite(duration) and 0 < duration <= MAX_SECONDS and count >= 1,
+            'Invalid narration coverage.')
+    require(isinstance(words, list) and words and all(0 <= w['start'] < w['end'] <= duration for w in words), 'Narration word timings required.')
+    paragraph_starts = [m.end() for m in re.finditer(r'\n\s*\n', text)]
+    paragraph_times = [0.0] + [next((w['start'] for w in words if w.get('char_start', -1) >= s), duration) for s in paragraph_starts]
+    if len(paragraph_times) == count:
+        bounds = paragraph_times + [duration]
+    else:
+        candidates = sorted({w['end'] for w in words if re.search(r'[.!?;]$', w.get('text', ''))})
+        bounds, minimum = [0.0], min(3.0, duration / (count * 2))
+        for index in range(1, count):
+            target = duration * index / count
+            options = [t for t in candidates if bounds[-1] + minimum <= t <= duration - (count - index) * minimum
+                       and abs(t - target) <= duration / count * .35]
+            bounds.append(min(options, key=lambda t: abs(t - target)) if options else target)
+        bounds.append(duration)
+    scenes = [{'image_id': image['id'], 'start_seconds': 0 if i == 0 else bounds[i] - .35,
+               'end_seconds': duration if i == count - 1 else bounds[i + 1] + .35} for i, image in enumerate(images)]
+    return {'schema_version': 1, 'source': 'exact_narration_word_times', 'narration_text_sha256': hashlib.sha256(text.encode()).hexdigest(),
+            'audio_sha256': report['audio_sha256'], 'word_timing_sha256': fingerprint(words),
+            'duration_seconds': duration, 'crossfade_seconds': .7, 'scenes': scenes}, None
+
+
 def with_bounds(timing, bounds, overlap=0.35):
     """Same scene layout as narration_timing (0.7 s crossfades), at the chosen boundaries."""
     last = len(timing['scenes']) - 1
@@ -128,12 +160,12 @@ def with_bounds(timing, bounds, overlap=0.35):
 class LeanPipeline:
     def __init__(self, *, owner_id, jobs, ledger_factory, uploads, objects, response_factory, narration_transport,
                  motion_transport, ffmpeg_version, workspace, activation_check=lambda: True, narrate=narrate, compose=compose,
-                 timing=narration_timing, sleep=time.sleep, clock=time.monotonic, poll_seconds=5,
+                 timing=None, sleep=time.sleep, clock=time.monotonic, poll_seconds=5,
                  motion_deadline_seconds=1200, read_failures=6, placer=None, checker=None):
         self.owner, self.jobs, self.ledger_factory, self.uploads, self.objects = owner_id, jobs, ledger_factory, uploads, objects
         self.response_factory, self.narration, self.motion = response_factory, narration_transport, motion_transport
         self.ffmpeg_version, self.workspace, self.check = ffmpeg_version, Path(workspace), activation_check
-        self.narrate, self.compose, self.timing, self.sleep, self.clock = narrate, compose, timing, sleep, clock
+        self.narrate, self.compose, self.timing, self.sleep, self.clock = narrate, compose, timing or lean_timing, sleep, clock
         self.poll, self.deadline, self.read_failures = poll_seconds, motion_deadline_seconds, read_failures
         self.placer, self.checker = placer, checker
 

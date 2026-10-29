@@ -45,8 +45,10 @@ class LeanBusy(ValueError):
     """Another film is still being made; nothing was reserved, started or charged."""
 
 
-# The renderer job times out at 1800 s; a film silent for longer has stopped without reporting back.
-STALE_SECONDS = 2100
+# The renderer job may run up to RENDER_TIMEOUT (long stories, sentence by sentence); a film silent for
+# longer than that has stopped without reporting back.
+RENDER_TIMEOUT = 14_400
+STALE_SECONDS = RENDER_TIMEOUT + 300
 BUSY = 'A film is already being made. Wait for it to finish or fail before starting another. Nothing was started or charged.'
 STOPPED = ('Stopped while the film was being made: the film job stopped without reporting back '
            '(it may have run out of time or memory). Nothing was charged twice. (Code: worker stopped)')
@@ -483,9 +485,9 @@ class LeanStarter:
     """
     ENV = 'BYRON_LEAN_JOB_ID'
 
-    def __init__(self, target, transport, *, container='renderer', timeout_seconds=1800):
+    def __init__(self, target, transport, *, container='renderer', timeout_seconds=RENDER_TIMEOUT):
         require(isinstance(target, dict) and re.fullmatch(r'byron-renderer(?:-[a-z0-9-]{1,30})?', target.get('job_name', ''))
-                and callable(transport) and 60 <= timeout_seconds <= 1800, 'Explicit renderer job and transport required.')
+                and callable(transport) and 60 <= timeout_seconds <= 86_400, 'Explicit renderer job and transport required.')
         self.target, self.transport, self.container, self.timeout = dict(target), transport, container, timeout_seconds
 
     def request(self, job_id):

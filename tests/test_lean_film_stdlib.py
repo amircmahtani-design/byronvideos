@@ -202,7 +202,7 @@ class LeanFilmChecks(unittest.TestCase):
         self.assertEqual(starter(JOB), operation)
         method, url, body = calls[0]
         self.assertEqual((method, url), ('POST', 'https://run.googleapis.com/v2/projects/synthetic-project/locations/us-central1/jobs/byron-renderer:run'))
-        self.assertEqual(body, {'overrides': {'taskCount': 1, 'timeout': '1800s', 'containerOverrides': [
+        self.assertEqual(body, {'overrides': {'taskCount': 1, 'timeout': '14400s', 'containerOverrides': [
             {'name': 'renderer', 'env': [{'name': 'BYRON_LEAN_JOB_ID', 'value': JOB}]}]}})
         with self.assertRaises(ValueError): LeanStarter(self.config['target'], lambda *a: {'name': 'elsewhere'})(JOB)
         with self.assertRaises(ValueError): starter('not-a-job')

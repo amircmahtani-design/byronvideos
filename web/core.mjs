@@ -1,5 +1,5 @@
-export const MAX_SCRIPT_CHARACTERS = 16000;
-export const MAX_SCRIPT_WORDS = 2000;
+export const MAX_SCRIPT_CHARACTERS = 100000;  // Mirrors byron_video/engine.py; generous on purpose.
+export const MAX_SCRIPT_WORDS = 20000;
 export const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 export const MAX_IMAGES = 5;
 export const MIN_IMAGES = 4;
@@ -76,7 +76,7 @@ export function skipNote(script) {
 export function validateScript(text) {
   if (!text.trim()) return 'Paste the words you want the narrator to read.';
   if (text.length > MAX_SCRIPT_CHARACTERS) return `Your script has ${text.length.toLocaleString()} characters. Please shorten it to ${MAX_SCRIPT_CHARACTERS.toLocaleString()} or fewer; nothing has been removed.`;
-  if (countWords(text) > MAX_SCRIPT_WORDS) return 'This prototype has a technical limit of 2,000 words per film. Nothing has been removed.';
+  if (countWords(text) > MAX_SCRIPT_WORDS) return `The studio accepts up to ${MAX_SCRIPT_WORDS.toLocaleString()} words per film. Nothing has been removed.`;
   return null;
 }
 

@@ -15,7 +15,7 @@ import wave
 from .elevenlabs_adapter import MAX_AUDIO_BYTES, fingerprint, plan_requests, require, validate_profile
 
 RATE = 24_000
-MAX_SECONDS = 900
+MAX_SECONDS = 7200  # Two hours of narration; the owner's only intended cap is money.
 
 
 def run(args):
