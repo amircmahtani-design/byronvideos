@@ -202,6 +202,15 @@ test('fixture-only capability cannot resume and malformed receipt cannot confirm
 });
 
 import {isPrivateDraft} from './core.mjs';
+import {skipNote,storySkips} from './core.mjs';
+
+test('heading lines and link-only lines are listed as not read aloud, matching spoken_text.py', () => {
+  const live='The Woman Who Waited\n\nby Lord Byron\n\nbadmaddangerous.com\n\nAt thirty-six, Leila Mehra was considered the most beautiful woman in Bombay.';
+  assert.deepEqual(storySkips(live),{heading:['The Woman Who Waited','by Lord Byron'],links:1});
+  assert.equal(skipNote(live),'Not read aloud or subtitled: the heading “The Woman Who Waited”, “by Lord Byron” and one web link.');
+  assert.deepEqual(storySkips('She ordered the frame from Amazon.com and waited.'),{heading:[],links:0});
+  assert.equal(skipNote('They sat down slowly.\nThe park was quiet.'),'');
+});
 test('private draft requires exact state, kind and flag; never inferred from generic completion', () => {
   const draft={status:'draft_preview_ready',artifact_kind:'PRIVATE_DRAFT_PREVIEW',draft:true,duration_seconds:32};
   assert.equal(isPrivateDraft(draft),true);

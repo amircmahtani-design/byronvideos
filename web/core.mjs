@@ -29,26 +29,46 @@ export function countWords(text) {
   return text.trim() ? text.trim().split(/\s+/u).length : 0;
 }
 
-// Mirrors byron_video/spoken_text.py: the title line and web links are never read aloud.
+// Mirrors byron_video/spoken_text.py: heading lines (title, byline) and web links are never read aloud.
 const MARKDOWN_LINK = /(?<!!)\[([^\[\]\r\n]+)\]\((https?:\/\/[^\s()]+)\)/gu;
 const WEB_ADDRESS = /(?:https?:\/\/|www\.)\S+/giu;
+const DOMAIN = /\b[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:com|net|org|co|uk|io|info|blog|me|art|eu|es|ae)\b(?:\/\S*)?/giu;
+function linkOnly(line) {
+  const withoutUrls = line.replace(WEB_ADDRESS, '');
+  const count = (line.match(WEB_ADDRESS) || []).length + (withoutUrls.match(DOMAIN) || []).length;
+  const rest = withoutUrls.replace(DOMAIN, '');
+  const trimmed = rest.replace(/^[\s:\-–—|·]+|[\s:\-–—|·]+$/gu, '');
+  const label = trimmed.split(/\s+/u).filter(Boolean).length <= 4 && rest.trimEnd().endsWith(':');
+  return [count, count > 0 && (!/\p{L}/u.test(trimmed) || label)];
+}
+function isHeading(line, following) {
+  line = line.trim();
+  if (line.startsWith('#') || (/^(?:written\s+|words\s+)?by\s+\S/iu.test(line) && line.split(/\s+/u).length <= 8)) return true;
+  return line.split(/\s+/u).length <= 15 && !/[.!?…:;,"'”’)]$/u.test(line) && !following.trim();
+}
 export function storySkips(script) {
   const lines = script.replace(MARKDOWN_LINK, '$1').replace(/\r\n?/gu, '\n').split('\n');
-  const first = lines.findIndex(line => line.trim());
-  let title = null;
-  if (first >= 0) {
-    const line = lines[first].trim(), following = lines[first + 1] || '';
-    if (line.startsWith('#') || (line.split(/\s+/u).length <= 15 && !/[.!?…:;,"'”’)]$/u.test(line) && !following.trim())) {
-      title = line.replace(/^#+/u, '').trim();
-    }
+  const heading = [];
+  let seen = 0;
+  for (let i = 0; i < lines.length && seen < 4; i++) {
+    if (!lines[i].trim()) continue;
+    seen++;
+    if (linkOnly(lines[i])[1]) continue;
+    if (!isHeading(lines[i], lines[i + 1] || '')) break;
+    heading.push(lines[i].trim().replace(/^#+/u, '').trim()); lines[i] = '';
   }
-  const links = lines.reduce((total, line) => total + (line.match(WEB_ADDRESS) || []).length, 0);
-  return {title, links};
+  let links = 0;
+  for (const line of lines) {
+    const [count, only] = linkOnly(line);
+    links += only ? count : (line.match(WEB_ADDRESS) || []).length;
+  }
+  return {heading, links};
 }
 export function skipNote(script) {
-  const {title, links} = storySkips(script);
+  const {heading, links} = storySkips(script);
+  const short = text => `“${text.length > 50 ? text.slice(0, 47) + '…' : text}”`;
   const parts = [];
-  if (title) parts.push(`the title “${title.length > 60 ? title.slice(0, 57) + '…' : title}”`);
+  if (heading.length) parts.push(`the heading ${heading.map(short).join(', ')}`);
   if (links) parts.push(links === 1 ? 'one web link' : `${links} web links`);
   return parts.length ? `Not read aloud or subtitled: ${parts.join(' and ')}.` : '';
 }
