@@ -57,6 +57,13 @@ def assemble_administration(*, config, processing_plan, bindings, acceptance, re
         admin_subjects=auth['admin_subjects'], csrf_secret=bindings.csrf_secret, revoked=journal.revoked)
     import hashlib
     owners = ['google_' + hashlib.sha256(('accounts.google.com\0' + s).encode()).hexdigest() for s in auth['admin_subjects']]
+    from .admin import AdminSession
+    from .hosted_control import Principal
+    from .hosted_uploads import CreatorSession
+    from .trusted_device import FirestoreTrustedDevices, TrustedDeviceIdentity, install_device_cookies
+    devices = FirestoreTrustedDevices(bindings.firestore_client, project_id=target['project_id'], namespace=db['namespace'])
+    google_identity, identity = identity, TrustedDeviceIdentity(identity, devices, owners=owners, csrf_secret=bindings.csrf_secret,
+        creator_session=lambda owner, csrf: CreatorSession(Principal(owner), csrf), admin_session=AdminSession)
     mode = config.get('native_api_mode', 'vertex_eu')
     names = ('elevenlabs', 'fal', 'default_voice') + (('gemini',) if mode == 'gemini_developer' else ())
     secrets = _AdminSecrets(bindings.secret_client, owners, {k: config['secret_resources'][k] for k in names})
@@ -67,7 +74,8 @@ def assemble_administration(*, config, processing_plan, bindings, acceptance, re
             'name': config['secret_resources']['google_oauth'] + '/versions/latest'}).payload.data.decode('utf-8')
     GoogleLogin(origin=auth['origin'], client_id=auth['oauth_audience'], redirect_uri=auth['origin'] + '/auth/callback',
         subject_emails=auth['subject_emails'], journal=journal, exchange=GoogleCodeExchange(oauth_secret, enabled=True),
-        identity_resolver=identity, enabled=True, activation_check=check).mount(app)
+        identity_resolver=google_identity, enabled=True, activation_check=check).mount(app)
+    install_device_cookies(app, devices, owners[0])  # Setup mode has exactly one owner.
     def admin_session(request):
         check()
         return identity.admin_session(request)
@@ -104,7 +112,7 @@ def assemble_administration(*, config, processing_plan, bindings, acceptance, re
     web_root = Path(__file__).resolve().parent.parent / 'web'
     require(not web_root.is_symlink() and (web_root / 'index.html').is_file(), 'Reviewed assets required.')
     app.mount('/', StaticFiles(directory=str(web_root), html=True, follow_symlink=False), name='creator-assets')
-    return RuntimeAssembly(app, None, None, None, None, None, identity, True, digest(acceptance))
+    return RuntimeAssembly(app, None, None, None, None, None, google_identity, True, digest(acceptance))
 
 
 def assemble_lean(*, config, processing_plan, bindings, acceptance, reviewer_public_key, transaction_runner=None):
