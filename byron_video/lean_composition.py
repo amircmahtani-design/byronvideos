@@ -39,6 +39,7 @@ from .portrait_composition import input_options, presentation, run, run_bounded,
 RAMP = 2.0
 TAIL = 2.0  # Seconds the last painting lingers after the final word.
 CLOSING_FADE = 1.5  # Gentle fade to charcoal within that tail.
+CAPTION_HOLD = 1.3  # A caption stays up across a pause up to this long (sentence and paragraph pauses).
 FULL_SCENE = 16.0
 TWO_PART_SCENE = 10.5
 JOIN_SIZE = (135, 240)
@@ -304,7 +305,9 @@ def compose_film(*, root, narration_wav, report, timing, scenes, output, ramp=RA
                     if level < 1:
                         frame = Image.blend(Image.new('RGB', (w, h), _colour(style, 'charcoal')), frame, level)
                     ci = bisect.bisect_right(capstarts, t) - 1
-                    draw_caption(frame, captions[ci] if ci >= 0 and t <= captions[ci].end else None, font, style)
+                    # Hold a caption through a storyteller pause rather than flickering off between sentences.
+                    held = ci >= 0 and (t <= captions[ci].end or (ci + 1 < len(captions) and captions[ci + 1].start - captions[ci].end <= CAPTION_HOLD))
+                    draw_caption(frame, captions[ci] if held else None, font, style)
                     process.stdin.write(frame.tobytes())
                 process.stdin.close()
                 require(process.wait(timeout=600) == 0, 'Encoding failed; incomplete output discarded.')

@@ -27,10 +27,17 @@ def fingerprint(value):
                                     separators=(',', ':'), allow_nan=False).encode()).hexdigest()
 
 
+PROFILE_KEYS = {'schema_version', 'version', 'status', 'provider', 'voice_id', 'model_id',
+                'voice_settings', 'output_format', 'seed', 'apply_text_normalization'}
+# Optional storyteller pacing: one request per sentence, with silences added between them.
+PACING = ('sentences',)
+SENTENCE_END = re.compile(r'[.!?…]+["\'”’)\]]*(?=\s|$)')
+ABBREVIATIONS = {'mr', 'mrs', 'ms', 'dr', 'st', 'mt', 'jr', 'sr', 'prof', 'rev', 'col', 'gen', 'capt', 'lt', 'vs', 'etc', 'no'}
+
+
 def validate_profile(profile):
-    require(isinstance(profile, dict) and set(profile) == {
-        'schema_version', 'version', 'status', 'provider', 'voice_id', 'model_id',
-        'voice_settings', 'output_format', 'seed', 'apply_text_normalization'}, 'Incomplete narration profile.')
+    require(isinstance(profile, dict) and set(profile) in (PROFILE_KEYS, PROFILE_KEYS | {'pacing'}), 'Incomplete narration profile.')
+    require(profile.get('pacing', PACING[0]) in PACING, 'Unknown narration pacing.')
     require(type(profile['schema_version']) is int and profile['schema_version'] == 1, 'Invalid narration schema.')
     require(profile['status'] == 'DRAFT' and profile['provider'] == 'elevenlabs', 'This adapter is an unapproved ElevenLabs draft only.')
     require(isinstance(profile['version'], str) and re.fullmatch(r'[a-z0-9.-]{1,80}', profile['version']), 'Invalid profile version.')
@@ -58,7 +65,7 @@ def plan_requests(text, profile):
     validate_script(text)
     p = validate_profile(profile)
     limit = MODEL_LIMITS[p['model_id']]
-    spans, start = [], 0
+    spans, start = ([], 0) if p.get('pacing') != 'sentences' else (sentence_spans(text, limit), len(text))
     while start < len(text):
         end = min(start + limit, len(text))
         if end < len(text):
@@ -73,17 +80,40 @@ def plan_requests(text, profile):
         require(bool(span['text'].strip()), 'Formatting creates an all-whitespace provider span; adjust whitespace before any provider calls. Nothing was cut.')
         body = {'text': span['text'], 'model_id': p['model_id'], 'voice_settings': p['voice_settings'],
                 'seed': p['seed'], 'apply_text_normalization': 'off', 'apply_language_text_normalization': False}
-        # Context is source text, not another requested narration or a prompt.
+        # Context is source text, not another requested narration or a prompt. Sentence pacing gives each
+        # sentence the surrounding story so its tone carries on naturally instead of restarting.
         if i:
-            body['previous_text'] = spans[i-1]['text'][-1000:]
+            body['previous_text'] = (text[max(0, span['char_start'] - 1000):span['char_start']] if p.get('pacing')
+                                     else spans[i-1]['text'][-1000:])
         if i + 1 < len(spans):
-            body['next_text'] = spans[i+1]['text'][:1000]
+            body['next_text'] = (text[span['char_end']:span['char_end'] + 1000] if p.get('pacing')
+                                 else spans[i+1]['text'][:1000])
         request = {'method': 'POST', 'url': f"{API_ORIGIN}/v1/text-to-speech/{p['voice_id']}/with-timestamps?output_format={p['output_format']}",
                    'body': body, 'char_start': span['char_start'], 'char_end': span['char_end'],
                    'profile_sha256': fingerprint(p), 'sequence': i + 1}
         request['sha256'] = fingerprint(request)
         requests.append(request)
     return requests
+
+
+def sentence_spans(text, limit):
+    """Contiguous spans, one per sentence (or line), each keeping its trailing whitespace."""
+    cuts = set()
+    for match in SENTENCE_END.finditer(text):
+        word = re.search(r'([A-Za-z]+)\W*$', text[:match.start() + 1])
+        if word and word.group(1).lower() in ABBREVIATIONS and match.group().startswith('.'):
+            continue  # "Mr. Mehra" is one sentence.
+        cuts.add(re.match(r'\s*', text[match.end():]).end() + match.end())
+    cuts |= {m.end() for m in re.finditer(r'\n\s*', text)}  # A line break always ends a spoken unit.
+    spans, start = [], 0
+    for end in sorted(c for c in cuts if 0 < c < len(text)) + [len(text)]:
+        if end > start and text[start:end].strip():
+            require(end - start <= limit, 'A sentence exceeds the provider request limit; nothing was cut.')
+            spans.append({'char_start': start, 'char_end': end, 'text': text[start:end]})
+            start = end
+    if start < len(text):  # Trailing whitespace joins the last span.
+        spans[-1] = {**spans[-1], 'char_end': len(text), 'text': text[spans[-1]['char_start']:]}
+    return spans
 
 
 def alignment_words(exact_text, alignment):

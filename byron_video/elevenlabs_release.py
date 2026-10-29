@@ -16,6 +16,15 @@ from .narration_media import RATE, MAX_SECONDS, run, wav_info, loudness_json
 from .provider_execution import load_recorded_narration
 
 END_TOLERANCE = 0.05  # Seconds a final word may overrun the decoded audio before it is a real mismatch.
+# Storyteller pacing (profile 'pacing': 'sentences'): silence added after each spoken sentence/line.
+SENTENCE_PAUSE = 0.45
+PARAGRAPH_PAUSE = 1.1
+
+
+def pause_after(chunk, last, pacing):
+    if last or pacing != 'sentences':
+        return 0
+    return round(RATE * (PARAGRAPH_PAUSE if '\n' in chunk[len(chunk.rstrip()):] else SENTENCE_PAUSE))
 
 
 def build_narration_candidate(*, owner_id, job_id, text, profile, approval, journal, response_store,
@@ -92,15 +101,18 @@ def build_narration_candidate(*, owner_id, job_id, text, profile, approval, jour
                               'char_start':ca+cursor, 'char_end':cb+cursor})
                 previous, last_char = b, cb
             require(response['words'] and not chunk[last_char:].strip(), 'Word timings omit source wording.')
+            pause = pause_after(chunk, index == len(requests), profile.get('pacing'))
             parts.append({'request_sha256': request['sha256'], 'request_id': response['request_id'],
                           'source_audio_sha256': response['audio_sha256'], 'decoded_frames': count,
-                          'offset_frames':total_frames, 'char_start':cursor, 'char_end':cursor+len(chunk)})
-            total_frames += count; cursor += len(chunk); text += chunk
+                          'offset_frames':total_frames, 'char_start':cursor, 'char_end':cursor+len(chunk), 'pause_frames': pause})
+            total_frames += count + pause; cursor += len(chunk); text += chunk
             require(total_frames <= RATE*MAX_SECONDS, 'Complete narration exceeds the 900-second technical ceiling; no truncation.')
         joined = temp/'joined.wav'
         with wave.open(str(joined), 'wb') as output:
             output.setnchannels(1); output.setsampwidth(2); output.setframerate(RATE)
-            for index in range(1,len(parts)+1): output.writeframes(wav_info(temp/f'chunk-{index}.wav')[1])
+            for index in range(1,len(parts)+1):
+                output.writeframes(wav_info(temp/f'chunk-{index}.wav')[1])
+                output.writeframes(b'\x00\x00' * parts[index-1]['pause_frames'])  # Storyteller pause (mono 16-bit).
         require(wav_info(joined)[0] == total_frames, 'Audio join changed sample count.')
         loud = 'loudnorm=I=-16:TP=-1:LRA=11'
         measure = run(['ffmpeg','-nostdin','-hide_banner','-f','wav','-i',str(joined),'-af',loud+':print_format=json','-f','null','-'])
