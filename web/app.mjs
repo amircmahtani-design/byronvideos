@@ -4,7 +4,7 @@ import {MAX_SCRIPT_CHARACTERS, countWords, validateScript, validateImages, moveI
 import {hostedCapability, freezeSubmission, submitHosted, persistPending, persistHostedJob, recoverSubmission, resumeCheckpoint, persistResume, resumeResolved, resumeHosted} from './hosted.mjs';
 
 const $ = id => document.getElementById(id);
-const ui = Object.fromEntries(['exact-actions','exact-note','approve-film','renew-preview','renew-clean','clean-download','check-exact','voice','refresh-voices','voice-status','creator','inputs','script','script-count','images','paintings','empty-images','convert','connection','reconnect','error','job','job-title','job-message','job-note','progress','download','new-film','resume','resume-film','prototype-title','prototype-copy','studio-status'].map(id => [id, $(id)]));
+const ui = Object.fromEntries(['exact-actions','exact-note','approve-film','renew-preview','renew-clean','clean-download','check-exact','voice','refresh-voices','voice-status','creator','inputs','script','script-count','images','paintings','empty-images','convert','connection','reconnect','error','job','job-title','job-message','job-note','progress','download','new-film','resume','resume-film','prototype-title','prototype-copy','studio-status','retry-upload'].map(id => [id, $(id)]));
 let paintings = [];
 let ready = false;
 let activeJob = null;
@@ -143,16 +143,26 @@ function savePending(value) {
   else { try { sessionStorage.removeItem('byron-pending-submission'); } catch { /* Keep any stale checkpoint safely locked. */ } }
 }
 function showUncertain(stage, reference, checkpointFailed = false) {
+  ui.job.hidden = false; ui.download.hidden = true; ui['new-film'].hidden = true; ui.progress.hidden = true;
+  if (stage === 'upload') {
+    // The film request is only sent after the 'job' checkpoint, so nothing paid can have started: safe to try again.
+    pendingSubmission = null; savePending(null); setBusy(false); ui.resume.hidden = true; ui['retry-upload'].hidden = false;
+    ui['job-title'].textContent = 'Your paintings did not upload';
+    ui['job-message'].textContent = 'Nothing was made and nothing was charged. Your story and paintings are still here.';
+    ui['job-note'].textContent = 'Press Try again. If it happens again, please let Amir know.';
+    ui.convert.textContent = 'Convert to film →';
+    return;
+  }
   pendingSubmission = {key:reference,stage};
-  setBusy(true); ui.job.hidden = false; ui.download.hidden = true; ui['new-film'].hidden = true; ui.resume.hidden = stage !== 'job'; ui.progress.hidden = true;
-  ui['job-title'].textContent = 'Submission needs review';
-  ui['job-message'].textContent = checkpointFailed ? 'Your upload was accepted, but its recovery checkpoint could not be saved. No film request was sent.' : stage === 'upload' ? 'The private upload result could not be confirmed. No film request was sent.' : 'The film request may already have been accepted.';
-  ui['job-note'].textContent = 'Do not submit again. Ask the studio administrator to check submission reference ' + reference + '. Nothing will be retried automatically.';
-  ui.convert.textContent = 'Submission needs review';
+  setBusy(true); ui.resume.hidden = false; ui['retry-upload'].hidden = true;
+  ui['job-title'].textContent = 'Checking your film';
+  ui['job-message'].textContent = checkpointFailed ? 'Your paintings were saved, but this browser could not keep its place. No film was started.' : 'Your film may already have started. It will never be made or charged twice.';
+  ui['job-note'].textContent = 'Please do not press Convert again. Press Check film status in a minute. If it still shows this, please let Amir know (reference ' + reference.slice(0, 8) + ').';
+  ui.convert.textContent = 'Please wait…';
 }
 function setBusy(value) { busy = value; showVoices(); ui['refresh-voices'].disabled = value || refreshingVoices; ui.inputs.disabled = value; ui.reconnect.disabled = value; updateConvert(); }
 function showJob(id) {
-  pendingSubmission = null;
+  pendingSubmission = null; ui['retry-upload'].hidden = true;
   activeJob = id; setBusy(true);
   if (hostedJob) {
     try { persistHostedJob(sessionStorage, id); savePending(null); }
@@ -190,7 +200,7 @@ async function pollJob() {
     if (progress === null) ui.progress.removeAttribute('value'); else ui.progress.value = progress;
     ui['job-message'].textContent = typeof job.message === 'string' ? job.message : 'The renderer is working on your film.';
     if (job.status === 'HOLD') {
-      stopPolling(); ui['job-title'].textContent = 'Submission needs review'; ui.progress.hidden = true;
+      stopPolling(); ui['job-title'].textContent = 'Your film is paused'; ui.progress.hidden = true;
       ui['job-note'].textContent = 'This film is on hold. Ask the studio administrator to review it. Check film status only checks this same film; it never submits or pays again.';
       if (eligibleResumeAttempt !== null && !resumePending) ui['job-note'].textContent = 'The previous worker has stopped. Resume this film continues the same saved inputs and plan; it does not repeat completed paid requests.';
       if (resumePending) ui['job-note'].textContent = 'Resume reference: ' + resumePending.key + '. Its result needs confirmation. Check film status only; do not request another resume.';
@@ -346,6 +356,10 @@ ui.creator.addEventListener('submit', async event => {
     } else { setBusy(false); showError(error.message || 'The local renderer could not accept this film.'); }
   } finally { if (rejected || activeJob || !ui.download.hidden) ui.convert.textContent = 'Convert to film →'; }
 });
+ui['retry-upload'].addEventListener('click', () => {
+  if (busy) return;
+  ui['retry-upload'].hidden = true; ui.job.hidden = true; ui.creator.requestSubmit();
+});
 ui['new-film'].addEventListener('click', () => {
   if(exactPending || exactWorking)return;
   clearTimeout(exactTimer);exactStatus=null;ui['exact-actions'].hidden=true;
@@ -368,6 +382,7 @@ try {
 try { restored = safeJobId(sessionStorage.getItem('byron-active-job')); hostedJob = sessionStorage.getItem('byron-active-job-mode') === 'hosted'; } catch { /* Optional recovery only. */ }
 if(exactPending && !restored) { restored=exactPending.job_id;hostedJob=true; }
 if (resumePending && !restored) { restored=resumePending.job_id; hostedJob=true; }
+if (pending?.stage === 'upload') { savePending(null); pending = null; } // Upload-only: no film was requested, nothing to recover.
 if (pending) showUncertain(pending.stage, pending.key);
 else if (restored) { showJob(restored); ui['job-note'].textContent = 'Reconnecting to your previous film. Your script and files are not saved in browser storage.'; pollJob(); }
 else checkRenderer();
