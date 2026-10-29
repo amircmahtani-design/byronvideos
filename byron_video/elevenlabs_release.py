@@ -15,6 +15,8 @@ from .elevenlabs_adapter import MAX_AUDIO_BYTES, fingerprint, plan_requests, req
 from .narration_media import RATE, MAX_SECONDS, run, wav_info, loudness_json
 from .provider_execution import load_recorded_narration
 
+END_TOLERANCE = 0.05  # Seconds a final word may overrun the decoded audio before it is a real mismatch.
+
 
 def build_narration_candidate(*, owner_id, job_id, text, profile, approval, journal, response_store,
                               expected_profile_sha256, expected_text_sha256, job_root,
@@ -77,6 +79,10 @@ def build_narration_candidate(*, owner_id, job_id, text, profile, approval, jour
             previous, last_char = 0., 0
             for word in response['words']:
                 a,b,ca,cb = word['start'],word['end'],word['char_start'],word['char_end']
+                # Provider timings and the decoded MP3 can differ by rounding at the very end (seen: 1 ms).
+                # Clamp only that tiny edge; a word starting past the audio, or ending well past it, still fails.
+                if type(b) in (int,float) and math.isfinite(b) and duration < b <= duration + END_TOLERANCE:
+                    b = duration; word = {**word, 'end': b}
                 require(type(ca) is int and type(cb) is int and last_char <= ca < cb <= len(chunk)
                         and not chunk[last_char:ca].strip() and chunk[ca:cb] == word['text'], 'Word text or spans changed before media handoff.')
                 require(all(type(t) in (int,float) and math.isfinite(t) for t in (a,b))

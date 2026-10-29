@@ -32,13 +32,13 @@ class NarrationReleaseChecks(unittest.TestCase):
         self.approval=SpendApproval('synthetic_approval',fingerprint(requests),(2,),5,2)
         self.calls=[]
     def tearDown(self):self.journal.close();self.temp_job.cleanup()
-    def prepare(self):
+    def prepare(self,end=3):
         def transport(request):
             self.calls.append(request)
             text=request['body']['text'];n=len(text)
             payload=json.dumps({'audio_base64':base64.b64encode(self.audio).decode(),'alignment':{
-                'characters':list(text),'character_start_times_seconds':[i*3/n for i in range(n)],
-                'character_end_times_seconds':[(i+1)*3/n for i in range(n)]}}).encode()
+                'characters':list(text),'character_start_times_seconds':[i*end/n for i in range(n)],
+                'character_end_times_seconds':[(i+1)*end/n for i in range(n)]}}).encode()
             return WireResponse('synthetic_request_1',payload)
         execute_narration_once(owner_id='fixture_owner',job_id='fixture_job_1',text=self.text,profile=self.profile,
             approval=self.approval,journal=self.journal,transport=transport,response_store=self.archive)
@@ -61,6 +61,14 @@ class NarrationReleaseChecks(unittest.TestCase):
         self.assertTrue((self.root/'candidate/narration.wav').exists())
         self.assertEqual((self.root/'candidate/provider-chunk-1.mp3').read_bytes(),self.audio)
         with self.assertRaises(ValueError):self.build()
+
+    def test_final_word_rounding_overrun_is_clamped_but_real_overrun_fails(self):
+        self.prepare(end=4.001)  # Seen live: the last word ended 1 ms after the decoded 4 s audio.
+        report=self.build()
+        self.assertEqual(report['words'][-1]['end'],4); self.assertEqual(report['exact_text'],self.text)
+        self.journal.close(); self.temp_job.cleanup(); self.setUp()
+        self.prepare(end=4.2)
+        with self.assertRaisesRegex(ValueError,'exceed decoded audio'):self.build()
 
     def test_frozen_voice_and_text_fingerprints_required_before_media(self):
         self.prepare()
