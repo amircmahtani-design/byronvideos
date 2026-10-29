@@ -45,11 +45,29 @@ def missing_runs(story, transcript):
     return runs, len(expected)
 
 
+def unheard_openings(story, transcript):
+    """Sentences whose FIRST word was not heard at all (a clipped or swallowed start)."""
+    expected, heard = words(story), words(transcript)
+    starts, count = set(), 0
+    for sentence in re.split(r'(?<=[.!?…])["\'”’)\]]*\s+|\n+', story):
+        found = words(sentence)
+        if found:
+            starts.add(count)
+        count += len(found)
+    missing = set()
+    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, expected, heard, autojunk=False).get_opcodes():
+        if tag == 'delete' or (tag == 'replace' and j2 - j1 < i2 - i1):
+            missing |= {i for i in range(i1, i2) if i in starts and (tag == 'delete' or i == i1)}
+    return [' '.join(expected[i:i + 6]) for i in sorted(missing)]
+
+
 def judge(story, transcript):
     runs, total = missing_runs(story, transcript)
     missing = sum(n for _, n, _ in runs)
-    ok = not runs and (total == 0 or missing / total <= MAX_MISSING)
-    return ok, {'missing_words': missing, 'total_words': total, 'runs': [{'near': s, 'words': n} for _, n, s in runs][:5]}
+    openings = unheard_openings(story, transcript)
+    ok = not runs and not openings and (total == 0 or missing / total <= MAX_MISSING)
+    near = [{'near': s, 'words': n} for _, n, s in runs] + [{'near': s, 'words': 1, 'opening': True} for s in openings]
+    return ok, {'missing_words': missing + len(openings), 'total_words': total, 'runs': near[:5]}
 
 
 def transcription_request(project, mp3):

@@ -35,5 +35,14 @@ class PacingChecks(unittest.TestCase):
         self.assertEqual(pause_after('A sentence. ', False, None), 0)
         self.assertLess(SKIP_SECONDS_PER_CHAR, 0.07)  # Well below calm narration, so normal sentences are never flagged.
 
+    def test_joins_are_softened_without_changing_length(self):
+        from array import array
+        from byron_video.elevenlabs_release import soften_edges
+        loud = array('h', [20000] * RATE).tobytes()
+        soft = array('h', soften_edges(loud))
+        self.assertEqual(len(soft), RATE)
+        self.assertEqual(soft[0], 0); self.assertEqual(soft[-1], 0)  # No click at either join.
+        self.assertEqual(soft[RATE // 2], 20000)  # The speech itself is untouched.
+
 
 if __name__ == '__main__': unittest.main()

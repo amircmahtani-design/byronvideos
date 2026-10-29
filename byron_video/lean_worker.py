@@ -232,8 +232,9 @@ class LeanPipeline:
                               expected_ffmpeg_version=self.ffmpeg_version)
         require(report.get('exact_text') == text and report.get('media_verified') is True, 'Narration differs from the exact story.')
         skips = [(p['char_start'], p['char_end']) for p in report.get('parts', []) if p.get('possible_skip')]
-        if skips:  # Recorded in the saved narration report as well; shown here for the owner's log.
-            print(json.dumps({'job_id': job.id, 'narration_possible_skips': skips}), file=sys.stderr)
+        clipped = [(p['char_start'], p['char_end']) for p in report.get('parts', []) if p.get('loud_start')]
+        if skips or clipped:  # Recorded in the saved narration report as well; shown here for the owner's log.
+            print(json.dumps({'job_id': job.id, 'narration_possible_skips': skips, 'narration_loud_starts': clipped}), file=sys.stderr)
         audio = folder / 'narration.wav'
         require(sha(audio.read_bytes()) == report['audio_sha256'], 'Narration audio changed.')
         self.jobs.record_step(self.owner, job.id, 'narration', {

@@ -21,6 +21,12 @@ class NarrationCheckChecks(unittest.TestCase):
         self.assertTrue(detail['runs'][0]['near'].startswith('she became unavailable'))
         self.assertGreaterEqual(detail['missing_words'], 7)
 
+    def test_a_swallowed_first_word_of_a_sentence_is_caught(self):
+        heard = STORY.replace('She became unavailable', 'became unavailable')
+        ok, detail = judge(STORY, heard)
+        self.assertFalse(ok); self.assertTrue(detail['runs'][0]['near'].startswith('she became'))
+        self.assertTrue(judge(STORY, STORY.replace('She became', 'Shi became'))[0])  # Misheard, not missing.
+
     def test_two_missing_words_are_tolerated_but_three_are_not(self):
         self.assertTrue(judge(STORY, STORY.replace('then cold, ', ''))[0])
         self.assertFalse(judge(STORY, STORY.replace('then cold, then ', ''))[0])

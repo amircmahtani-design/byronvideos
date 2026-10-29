@@ -4,6 +4,7 @@ No TTS, network or budget mutation occurs here. It loads independently persisted
 provider receipts, decodes every audio span and validates exact wording/timing.
 The result is DRAFT and requires real provider + human acceptance before release.
 """
+from array import array
 import hashlib
 import json
 import math
@@ -20,6 +21,20 @@ END_TOLERANCE = 0.05  # Seconds a final word may overrun the decoded audio befor
 SENTENCE_PAUSE = 0.45
 PARAGRAPH_PAUSE = 1.1
 SKIP_SECONDS_PER_CHAR = 0.035  # Calm narration runs about 0.07 s per character; half that is suspicious.
+
+
+EDGE_FADE = 0.005  # 5 ms: removes join clicks; far too short to hear as a fade.
+LOUD_START_RMS = 1500  # 16-bit RMS over the first 20 ms; ElevenLabs normally begins with near-silence.
+
+
+def soften_edges(pcm):
+    """Same length, mono 16-bit: a 5 ms linear fade in and out so joined sentences never click."""
+    samples = array('h', pcm)
+    n = min(round(RATE * EDGE_FADE), len(samples) // 2)
+    for i in range(n):
+        samples[i] = int(samples[i] * i / n)
+        samples[-1 - i] = int(samples[-1 - i] * i / n)
+    return samples.tobytes()
 
 
 def pause_after(chunk, last, pacing):
@@ -84,6 +99,8 @@ def build_narration_candidate(*, owner_id, job_id, text, profile, approval, jour
                  '-f','mp3','-i',str(original),'-t',str(MAX_SECONDS+1),'-map','0:a:0','-vn','-ac','1','-ar',str(RATE),'-c:a','pcm_s16le','-f','wav',str(decoded)])
             count, pcm = wav_info(decoded)
             duration = count/RATE
+            opening = array('h', pcm[:2 * round(RATE * 0.02)])  # Speech already loud in the first 20 ms suggests a clipped start.
+            loud_start = bool(opening) and math.sqrt(sum(s * s for s in opening) / len(opening)) > LOUD_START_RMS
             require([(w['text'], w['char_start'], w['char_end']) for w in response['words']] ==
                     [(m.group(), m.start(), m.end()) for m in re.finditer(r'\S+', chunk)], 'Word boundaries differ from exact source tokens.')
             previous, last_char = 0., 0
@@ -108,14 +125,16 @@ def build_narration_candidate(*, owner_id, job_id, text, profile, approval, jour
             parts.append({'request_sha256': request['sha256'], 'request_id': response['request_id'],
                           'source_audio_sha256': response['audio_sha256'], 'decoded_frames': count,
                           'offset_frames':total_frames, 'char_start':cursor, 'char_end':cursor+len(chunk), 'pause_frames': pause,
-                          'possible_skip': spoken >= 12 and count / RATE < SKIP_SECONDS_PER_CHAR * spoken})
+                          'possible_skip': spoken >= 12 and count / RATE < SKIP_SECONDS_PER_CHAR * spoken,
+                          'loud_start': loud_start})
             total_frames += count + pause; cursor += len(chunk); text += chunk
             require(total_frames <= RATE*MAX_SECONDS, 'Complete narration exceeds the 900-second technical ceiling; no truncation.')
         joined = temp/'joined.wav'
         with wave.open(str(joined), 'wb') as output:
             output.setnchannels(1); output.setsampwidth(2); output.setframerate(RATE)
             for index in range(1,len(parts)+1):
-                output.writeframes(wav_info(temp/f'chunk-{index}.wav')[1])
+                pcm = wav_info(temp/f'chunk-{index}.wav')[1]
+                output.writeframes(soften_edges(pcm) if profile.get('pacing') == 'sentences' else pcm)
                 output.writeframes(b'\x00\x00' * parts[index-1]['pause_frames'])  # Storyteller pause (mono 16-bit).
         require(wav_info(joined)[0] == total_frames, 'Audio join changed sample count.')
         loud = 'loudnorm=I=-16:TP=-1:LRA=11'
