@@ -11,8 +11,8 @@ from pathlib import Path
 
 from PIL import Image
 
-from byron_video.lean_composition import (RAMP, camera, drift_at, frame_difference, scene_plan, state_at, still_frame,
-                                          still_windows)
+from byron_video.lean_composition import (FULL_SCENE, MIDDLE_RAMP, RAMP, TWO_PART_SCENE, camera, drift_at, frame_difference,
+                                          scene_plan, state_at, still_frame, still_windows)
 
 
 def parts(plan):
@@ -34,28 +34,39 @@ class SceneRuleChecks(unittest.TestCase):
     def test_full_rule_places_5_2_3_at_start_middle_and_end(self):
         plan = scene_plan(20, 10)
         self.assertEqual(plan['rule'], 'full')
-        self.assertEqual(parts(plan), [(0, 0, 5), (10 - (2 + RAMP) / 2, 5, 7), (20 - (3 + RAMP / 2), 7, 10)])
+        m = min(RAMP, MIDDLE_RAMP)
+        self.assertEqual(parts(plan), [(0, 0, 5), (10 - (2 + m) / 2, 5, 7), (20 - (3 + RAMP / 2), 7, 10)])
         first, middle, last = plan['segments']
         self.assertEqual((first.ramp_in, first.ramp_out), (0, RAMP))  # Direct start: clip t=0 is the original.
-        self.assertEqual((middle.ramp_in, middle.ramp_out), (RAMP, RAMP))
+        self.assertEqual((middle.ramp_in, middle.ramp_out), (m, m))
         self.assertEqual((last.ramp_in, last.ramp_out), (RAMP, 0))  # Clip t=L is the original; scene crossfade follows.
         self.assertAlmostEqual(last.end, 20); self.assertAlmostEqual(middle.at + middle.length / 2, 10)
         self.assert_forward_once(plan)
-        self.assertEqual(scene_plan(16, 10)['rule'], 'full')
+        self.assertEqual(scene_plan(FULL_SCENE, 10)['rule'], 'full')
+
+    def test_long_scene_spreads_four_new_moments_of_motion(self):
+        plan = scene_plan(45, 10)
+        self.assertEqual(plan['rule'], 'spread')
+        self.assertEqual([(s.clip_from, s.clip_to) for s in plan['segments']], [(0, 4), (4, 6), (6, 8), (8, 10)])  # No repeats.
+        centres = [s.at + s.length / 2 for s in plan['segments'][1:3]]
+        self.assertAlmostEqual(centres[0], 15); self.assertAlmostEqual(centres[1], 30)
+        self.assertAlmostEqual(plan['segments'][-1].end, 45)
+        self.assert_forward_once(plan)
+        self.assertEqual(scene_plan(29.9, 10)['rule'], 'full')
 
     def test_short_scene_rules(self):
         plan = scene_plan(12, 10)
         self.assertEqual(plan['rule'], 'two_part'); self.assertEqual(parts(plan), [(0, 0, 5), (12 - (3 + RAMP / 2), 7, 10)])
-        self.assertEqual(scene_plan(15.99, 10)['rule'], 'two_part'); self.assertEqual(scene_plan(10.5, 10)['rule'], 'two_part')
+        self.assertEqual(scene_plan(FULL_SCENE - 0.01, 10)['rule'], 'two_part'); self.assertEqual(scene_plan(TWO_PART_SCENE, 10)['rule'], 'two_part')
         plan = scene_plan(6, 10)
-        self.assertEqual(plan['rule'], 'opening_only'); self.assertEqual(plan['segments'][0].ramp_out, min(RAMP, 2.4))
+        self.assertEqual(plan['rule'], 'opening_only'); self.assertAlmostEqual(plan['segments'][0].ramp_out, min(RAMP, 2.4))
         self.assertLessEqual(plan['segments'][0].end, 6)
-        for duration in (0.5, 3, 6, 7.99, 8, 9.3, 10.49, 10.5, 12, 14.99, 15, 15.99, 16, 30, 61):
+        for duration in (0.5, 3, 6, 7.99, 8, 9.3, 10.49, 10.5, 11.5, 12, 14.99, 15, 16.99, 17, 30, 61):
             self.assert_forward_once(scene_plan(duration, 10))
             self.assert_forward_once(scene_plan(duration, 12))
 
     def test_longer_clip_never_overlaps_or_rewinds(self):
-        plan = scene_plan(10.5, 12)
+        plan = scene_plan(TWO_PART_SCENE, 12)
         self.assertGreater(plan['segments'][1].clip_from, 7)  # Starts later in the clip instead of overlapping.
         self.assert_forward_once(plan)
         with self.assertRaises(ValueError): scene_plan(10, 6)

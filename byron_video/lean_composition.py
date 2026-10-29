@@ -1,10 +1,13 @@
 """Lean "5/2/3" portrait composition: animated clip parts around the original still.
 
-Scene rule (scene length D from the narration split, clip length L ≈ 10 s, ramp R = 2 s):
-  D >= 16 s         full:         clip 0–5 s at the scene start, clip 5–7 s centred on D/2,
+Scene rule (scene length D from the narration split, clip length L ≈ 10 s, ramp R = 3 s; the
+2 s middle parts ease over 2 s):
+  D >= 30 s         spread:       clip 0–4 s at the start, 4–6 s centred on D/3, 6–8 s centred on 2D/3,
+                                  8–L s ending exactly at the scene end (four moments, never repeated).
+  17 <= D < 30 s    full:         clip 0–5 s at the scene start, clip 5–7 s centred on D/2,
                                   clip 7–L s ending exactly at the scene end.
-  10.5 <= D < 16 s  two_part:     clip 0–5 s at the start and clip 7–L s ending at the scene end.
-  D < 10.5 s        opening_only: clip 0–a s at the start, then the still until the scene end.
+  11.5 <= D < 17 s  two_part:     clip 0–5 s at the start and clip 7–L s ending at the scene end.
+  D < 11.5 s        opening_only: clip 0–a s at the start, then the still until the scene end.
 Wherever a part meets the still, the motion never stops or starts abruptly: over R seconds
 its playback speed eases smoothly to zero (or up from zero) while it dissolves into (or out
 of) the still, so the subject settles into the painting. A ramp of R output seconds uses
@@ -36,12 +39,14 @@ from PIL import Image, ImageChops, ImageOps, ImageStat
 from .engine import _colour, _font, draw_caption, make_captions, wrap_caption, write_srt
 from .portrait_composition import input_options, presentation, run, run_bounded, validate_words
 
-RAMP = 2.0
+RAMP = 3.0
+MIDDLE_RAMP = 2.0  # The 2 s middle clip part can ease in and out over at most 2 s each.
 TAIL = 2.0  # Seconds the last painting lingers after the final word.
 CLOSING_FADE = 1.5  # Gentle fade to charcoal within that tail.
 CAPTION_HOLD = 1.3  # A caption stays up across a pause up to this long (sentence and paragraph pauses).
-FULL_SCENE = 16.0
-TWO_PART_SCENE = 10.5
+SPREAD_SCENE = 30.0
+FULL_SCENE = 17.0
+TWO_PART_SCENE = 11.5
 JOIN_SIZE = (135, 240)
 ZOOM_RATE = 0.004  # Zoom amplitude per second of still window: slow by construction.
 MAX_ZOOM = 0.05
@@ -95,9 +100,15 @@ def scene_plan(duration, clip_seconds=10.0, ramp=RAMP):
     D, L, R = float(duration), float(clip_seconds), float(ramp)
     require(math.isfinite(D) and D > 0 and math.isfinite(L) and 7.5 <= L <= 12 and 0 < R <= 3, 'Invalid scene or clip timing.')
     tail = (L - 7) + R / 2  # Output length of the final part (clip 7–L, eased in only).
-    if D >= FULL_SCENE:
-        rule = 'full'
-        parts = [(0., 0., 5., 0., R), (D / 2 - (2 + R) / 2, 5., 7., R, R), (D - tail, 7., L, R, 0.)]
+    if D >= SPREAD_SCENE:
+        # A long scene gets four moments of motion, each a NEW part of the clip, spread across the scene.
+        rule, m = 'spread', min(R, MIDDLE_RAMP)
+        end_part = (L - 8) + R / 2
+        parts = [(0., 0., 4., 0., R), (D / 3 - (2 + m) / 2, 4., 6., m, m), (2 * D / 3 - (2 + m) / 2, 6., 8., m, m),
+                 (D - end_part, 8., L, R, 0.)]
+    elif D >= FULL_SCENE:
+        rule, m = 'full', min(R, MIDDLE_RAMP)
+        parts = [(0., 0., 5., 0., R), (D / 2 - (2 + m) / 2, 5., 7., m, m), (D - tail, 7., L, R, 0.)]
     elif D >= TWO_PART_SCENE:
         rule, parts = 'two_part', [(0., 0., 5., 0., R), (D - tail, 7., L, R, 0.)]
     else:

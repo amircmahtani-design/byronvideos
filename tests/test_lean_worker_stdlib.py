@@ -147,6 +147,14 @@ class LeanWorkerChecks(unittest.TestCase):
                 self.assertIn(words, message); self.assertIn(code, message); self.assertLessEqual(len(message), 300)
                 self.assertIn('ElevenLabs' if provider == 'elevenlabs' else '(fal)', message)
 
+    def test_skipped_narration_stops_before_any_painting_is_animated(self):
+        eleven, fal = ElevenLabs(), Fal()
+        pipeline = self.pipeline(eleven, fal)
+        pipeline.checker = lambda **kw: (False, {'missing_words': 9, 'total_words': 20, 'runs': [{'near': 'she became unavailable', 'words': 9}]})
+        job = pipeline.run(self.job.id)
+        self.assertEqual(job.status, 'failed'); self.assertEqual(fal.submitted, [])  # No animation was paid for.
+        self.assertIn('narration check', job.message); self.assertIn('she became unavailable', job.message)
+
     def test_placement_bounds_keep_crossfades_and_order(self):
         timing = {'duration_seconds': 40.0, 'crossfade_seconds': .7, 'scenes': [
             {'image_id': f'painting_{i}', 'start_seconds': 0, 'end_seconds': 0} for i in range(1, 5)]}

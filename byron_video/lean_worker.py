@@ -26,6 +26,7 @@ from .hosted_control import JOB_ID, Principal, VerifiedImage, canonical, require
 from .lean_film import (LeanBudgetExceeded, LeanJobStore, LeanLedger, LeanObjects, lean_activation, lean_settings,
                         motion_approval, motion_cents, motion_operation, narration_approval, owner_for)
 from .provider_execution import ProviderOutcomeUnknown, plan_anchored_motion, submit_motion_once
+from .narration_check import NarrationSkipped, check as check_narration
 from .scene_placement import place
 
 AUDIO = {'integrated_lufs': -16, 'true_peak_dbfs': -1, 'lra': 11}
@@ -64,6 +65,12 @@ def explain(stage, error):
         code = ' '.join(x for x in (error.provider or '', error.reason, error.detail) if x)
     elif isinstance(error, LeanTimeout):
         return TOO_SLOW
+    elif isinstance(error, NarrationSkipped):
+        near = (error.detail.get('runs') or [{}])[0].get('near', '')
+        message = (f'Stopped at the narration check: the voice skipped part of the story (near “{near}…”). '
+                   'No painting was animated, so nothing was charged for animation. Press “I’ve fixed it — try again” '
+                   f"to record it again. (Code: narration skipped {error.detail.get('missing_words', '?')} words)")
+        return message if len(message) <= 300 else message[:297] + '...'
     else:
         cause, code = 'something went wrong inside the studio.', type(error).__name__[:40]
     message = f'Stopped {where}: {cause} Nothing was charged twice. (Code: {code})'
@@ -122,13 +129,13 @@ class LeanPipeline:
     def __init__(self, *, owner_id, jobs, ledger_factory, uploads, objects, response_factory, narration_transport,
                  motion_transport, ffmpeg_version, workspace, activation_check=lambda: True, narrate=narrate, compose=compose,
                  timing=narration_timing, sleep=time.sleep, clock=time.monotonic, poll_seconds=5,
-                 motion_deadline_seconds=1200, read_failures=6, placer=None):
+                 motion_deadline_seconds=1200, read_failures=6, placer=None, checker=None):
         self.owner, self.jobs, self.ledger_factory, self.uploads, self.objects = owner_id, jobs, ledger_factory, uploads, objects
         self.response_factory, self.narration, self.motion = response_factory, narration_transport, motion_transport
         self.ffmpeg_version, self.workspace, self.check = ffmpeg_version, Path(workspace), activation_check
         self.narrate, self.compose, self.timing, self.sleep, self.clock = narrate, compose, timing, sleep, clock
         self.poll, self.deadline, self.read_failures = poll_seconds, motion_deadline_seconds, read_failures
-        self.placer = placer
+        self.placer, self.checker = placer, checker
 
     def run(self, job_id):
         require(isinstance(job_id, str) and bool(JOB_ID.fullmatch(job_id)), 'Invalid film reference.')
@@ -171,6 +178,11 @@ class LeanPipeline:
         self._progress(job, 10, 'Recording the narration…')
         report, audio = self._narration(job, journal, root)
         self._cost(job, ledger)
+        if self.checker is not None:  # Listen back before any painting is animated (and paid for).
+            heard, detail = self.checker(text=inputs['narrated_text'], audio_path=audio)
+            print(json.dumps({'job_id': job.id, 'narration_check': heard, 'detail': detail}), file=sys.stderr)
+            if heard is False:
+                raise NarrationSkipped(detail)
         self.stage = 'animation'
         clips = self._animation(job, journal, root)
         self._cost(job, ledger)
@@ -346,7 +358,8 @@ def build_pipeline(config, check, workspace, *, credential_bundle=None, sdk_fact
                                                     timeout_seconds=180),  # A ~3,000-character story can take a minute or more.
         motion_transport=FalQueueTransport(lambda: keys('fal'), enabled=True, client_factory=http_client_factory),
         ffmpeg_version=config['runtime']['ffmpeg_version'], workspace=workspace, activation_check=check,
-        placer=lambda **kw: place(project=project, token=credentials.token_reader, client_factory=http_client_factory, **kw))
+        placer=lambda **kw: place(project=project, token=credentials.token_reader, client_factory=http_client_factory, **kw),
+        checker=lambda **kw: check_narration(project=project, token=credentials.token_reader, client_factory=http_client_factory, **kw))
 
 
 def main(argv=None, *, environ=None):
