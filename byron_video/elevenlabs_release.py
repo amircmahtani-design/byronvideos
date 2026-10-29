@@ -15,6 +15,7 @@ import wave
 from .elevenlabs_adapter import MAX_AUDIO_BYTES, fingerprint, plan_requests, require, validate_profile
 from .narration_media import RATE, MAX_SECONDS, run, wav_info, loudness_json
 from .provider_execution import load_recorded_narration
+from .cloud_journal import MAX_ALLOCATIONS
 
 END_TOLERANCE = 0.05  # Seconds a final word may overrun the decoded audio before it is a real mismatch.
 # Storyteller pacing (profile 'pacing': 'sentences'): silence added after each spoken sentence/line.
@@ -62,7 +63,9 @@ def build_narration_candidate(*, owner_id, job_id, text, profile, approval, jour
     provenance = {k:v for k,v in recorded.items() if k not in {'requests','responses'}}
     provenance['source_kind'] = source_kind
     require(audio_settings == {'integrated_lufs': -16, 'true_peak_dbfs': -1, 'lra': 11}, 'This draft requires its explicit loudness settings.')
-    require(isinstance(requests, list) and isinstance(responses, list) and 0 < len(requests) == len(responses) <= 2, 'All planned narration responses are required.')
+    # Sentence pacing records one response per sentence; the ledger allows the same maximum per film.
+    require(isinstance(requests, list) and isinstance(responses, list) and 0 < len(requests) == len(responses) <= MAX_ALLOCATIONS,
+            'All planned narration responses are required.')
     profile = validate_profile(profile)
     planned_text = ''.join(request['body']['text'] for request in requests)
     require(fingerprint(requests) == fingerprint(plan_requests(planned_text, profile)), 'Narration requests differ from the frozen deterministic plan.')

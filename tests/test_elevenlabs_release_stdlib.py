@@ -70,6 +70,24 @@ class NarrationReleaseChecks(unittest.TestCase):
         self.prepare(end=4.2)
         with self.assertRaisesRegex(ValueError,'exceed decoded audio'):self.build()
 
+    def test_full_length_sentence_paced_story_assembles_every_sentence_with_pauses(self):
+        # Live failure: a 75-sentence story hit an old two-piece limit here. Use the real assembly on 40 sentences.
+        self.journal.close(); self.temp_job.cleanup(); self.setUp()
+        self.text = '\n\n'.join(' '.join(f'Sentence {p}-{s} is here.' for s in range(4)) for p in range(10))
+        self.profile = {**profile(), 'pacing': 'sentences'}
+        requests = plan_requests(self.text, self.profile)
+        self.assertEqual(len(requests), 40)
+        self.approval = SpendApproval('synthetic_approval', fingerprint(requests), tuple([1] * 40), 100, 2)
+        self.prepare(end=0.6)
+        report = self.build()
+        self.assertEqual(report['exact_text'], self.text); self.assertEqual(len(report['parts']), 40)
+        self.assertEqual(len(self.calls), 40)
+        pauses = [p['pause_frames'] for p in report['parts']]
+        self.assertEqual(pauses[-1], 0); self.assertTrue(all(p > 0 for p in pauses[:-1]))
+        self.assertGreater(pauses[3], pauses[0])  # Paragraph pause after the 4th sentence is longer than a sentence pause.
+        starts = [w['start'] for w in report['words']]
+        self.assertEqual(starts, sorted(starts)); self.assertLessEqual(report['words'][-1]['end'], report['duration_seconds'])
+
     def test_frozen_voice_and_text_fingerprints_required_before_media(self):
         self.prepare()
         for kw in [dict(expected_profile_sha256='a'*64),dict(expected_text_sha256='b'*64)]:
