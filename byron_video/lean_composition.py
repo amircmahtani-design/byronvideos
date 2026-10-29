@@ -172,6 +172,73 @@ def still_frame(path, size):
         return ImageOps.fit(image, size, method=Image.Resampling.LANCZOS, centering=(.5, .5))
 
 
+def _render(source, box, size, resample=Image.Resampling.BILINEAR):
+    return source.transform(size, Image.Transform.EXTENT, box, resample)
+
+
+def _cost(a, b):
+    return ImageStat.Stat(ImageChops.difference(a, b)).mean[0]
+
+
+def align_still(original, target, max_shift=0.12, scales=(0.8, 1.25)):
+    """The original painting framed to match the animated clip's anchor frame.
+
+    The video model re-frames the painting slightly (scale and position), so a plain cover-crop
+    of the original sits a few pixels off the clip: dissolving between them shows every outline
+    twice. This searches the crop box (scale + offset; coarse grid, then refinement) that best
+    matches the anchor frame, and renders the still from the full-resolution original with it.
+    Returns (still, info). Boxes stay inside the painting; no borders are invented.
+    """
+    w, h = target.size
+    source = ImageOps.exif_transpose(original).convert('RGB') if isinstance(original, Image.Image) else original
+    sw, sh = source.size
+    base = min(sw / w, sh / h) * w  # Cover-crop box width (ImageOps.fit, centred).
+
+    def box(s, dx, dy):
+        bw = base / s; bh = bw * h / w
+        cx, cy = sw / 2 + dx * base, sh / 2 + dy * base
+        return (cx - bw / 2, cy - bh / 2, cx + bw / 2, cy + bh / 2)
+
+    def inside(b):
+        return b[0] >= -0.5 and b[1] >= -0.5 and b[2] <= sw + 0.5 and b[3] <= sh + 0.5
+
+    levels = []
+    for small in ((68, 120), (135, 240), (270, 480)):
+        factor = small[0] / w
+        levels.append((small, factor, source.resize((max(1, round(sw * factor * 2)), max(1, round(sh * factor * 2))), Image.Resampling.BOX),
+                       target.convert('L').resize(small, Image.Resampling.BOX)))
+
+    def cost(level, p):
+        small, factor, src, goal = levels[level]
+        b = box(*p)
+        if p[0] < scales[0] or p[0] > scales[1] or abs(p[1]) > max_shift or abs(p[2]) > max_shift or not inside(b):
+            return math.inf
+        k = src.size[0] / sw
+        return _cost(_render(src, tuple(v * k for v in b), small).convert('L'), goal)
+
+    best = min(((s / 100, dx / 100, dy / 100) for s in range(round(scales[0] * 100), round(scales[1] * 100) + 1, 2)
+                for dx in range(-12, 13, 2) for dy in range(-12, 13, 2)), key=lambda p: cost(0, p))
+    for level, steps in ((1, (0.01, 0.005)), (2, (0.004, 0.002, 0.001, 0.0005))):
+        current = cost(level, best)
+        for step in steps:
+            improved = True
+            while improved:
+                improved = False
+                for axis in range(3):
+                    for sign in (-1, 1):
+                        trial = list(best); trial[axis] += sign * step; trial = tuple(trial)
+                        value = cost(level, trial)
+                        if value < current - 1e-9:
+                            best, current, improved = trial, value, True
+    still = _render(source, box(*best), (w, h), Image.Resampling.BICUBIC)
+    plain = ImageOps.fit(source, (w, h), method=Image.Resampling.LANCZOS, centering=(.5, .5))
+    info = {'scale': round(best[0], 4), 'dx': round(best[1], 4), 'dy': round(best[2], 4),
+            'before': frame_difference(plain, target), 'after': frame_difference(still, target)}
+    if info['after'] >= info['before']:  # Alignment never makes the match worse.
+        return plain, {**info, 'scale': 1., 'dx': 0., 'dy': 0., 'after': info['before'], 'used': 'cover_crop'}
+    return still, {**info, 'used': 'aligned'}
+
+
 def camera(frame, zoom=1., x=0., y=0.):
     """Apply the camera framing to a whole scene frame (still, moving or a dissolve of both)."""
     if zoom == 1 and x == 0 and y == 0:
@@ -197,13 +264,39 @@ def clip_seconds(path):
     return value
 
 
+def native_fps(path):
+    info = json.loads(run_bounded(['ffprobe', '-v', 'error', *input_options(path, video=True), '-select_streams', 'v:0',
+        '-show_entries', 'stream=avg_frame_rate,r_frame_rate', '-of', 'json', str(path)], 30, 65536).stdout)
+    stream = (info.get('streams') or [{}])[0]
+    for key in ('avg_frame_rate', 'r_frame_rate'):
+        try:
+            top, _, bottom = str(stream.get(key, '')).partition('/')
+            value = float(top) / float(bottom or 1)
+            if 10 <= value <= 120:
+                return value
+        except (ValueError, ZeroDivisionError):
+            pass
+    return None
+
+
+def anchor_frame(path, width, height):
+    """The clip's first frame (its anchor), cover-cropped exactly like ClipFrames."""
+    vf = f'scale={width}:{height}:force_original_aspect_ratio=increase:flags=lanczos,crop={width}:{height},setsar=1'
+    raw = run_bounded(['ffmpeg', '-nostdin', '-v', 'error', *input_options(path, video=True), '-i', str(path), '-map', '0:v:0',
+        '-frames:v', '1', '-an', '-vf', vf, '-f', 'rawvideo', '-pix_fmt', 'rgb24', 'pipe:1'], 60, width * height * 3 + 1).stdout
+    require(len(raw) == width * height * 3, 'The animated clip could not be decoded.')
+    return Image.frombytes('RGB', (width, height), raw)
+
+
 class ClipFrames:
     """Every clip frame, cover-cropped at the canvas rate, kept compressed in memory for random access
     (a movement may play back toward its anchor). Slowed motion blends the two nearest source frames."""
     def __init__(self, path, width, height, fps):
-        self.fps, self.frames, self.cache = fps, [], {}
+        # Native frame rate: forcing a 25/30 fps clip to the canvas rate drops frames and makes motion hitch;
+        # sampling by time at the native rate (blending neighbours) keeps it smooth.
+        self.fps, self.frames, self.cache = native_fps(path) or fps, [], {}
         size, dimensions = width * height * 3, (width, height)
-        vf = f'fps={fps},scale={width}:{height}:force_original_aspect_ratio=increase:flags=lanczos,crop={width}:{height},setsar=1'
+        vf = f'scale={width}:{height}:force_original_aspect_ratio=increase:flags=lanczos,crop={width}:{height},setsar=1'
         with tempfile.TemporaryFile() as errors:
             process = subprocess.Popen(['ffmpeg', '-nostdin', '-v', 'error', '-threads', '1', *input_options(path, video=True),
                 '-i', str(path), '-map', '0:v:0', '-an', '-vf', vf, '-f', 'rawvideo', '-pix_fmt', 'rgb24', 'pipe:1'],
@@ -263,9 +356,12 @@ def compose_film(*, root, narration_wav, report, timing, scenes, output, ramp=RA
         require(scene['image_id'] == item['image_id'], 'Scene order differs from the numbered paintings.')
         length = clip_seconds(item['clip_path'])
         end = scene['end_seconds'] + (TAIL if number == len(scenes) else 0)
+        # Frame the still exactly like the clip's anchor so the dissolve never shows outlines twice.
+        with Image.open(item['original_path']) as original:
+            still, alignment = align_still(ImageOps.exif_transpose(original).convert('RGB'), anchor_frame(item['clip_path'], w, h))
         items.append({'image_id': item['image_id'], 'start': scene['start_seconds'], 'end': end,
                       'plan': scene_plan(end - scene['start_seconds'], length, ramp, turn),
-                      'still': still_frame(item['original_path'], (w, h)), 'clip': item['clip_path']})
+                      'still': still, 'alignment': alignment, 'clip': item['clip_path']})
     readers, joins = {}, []
 
     def scene_frame(index, local):
@@ -339,11 +435,11 @@ def compose_film(*, root, narration_wav, report, timing, scenes, output, ramp=RA
         encoded.replace(output)
     write_srt(output.with_suffix('.srt'), captions)
     data = output.read_bytes()
-    return {'schema_version': 1, 'composition': 'lean-anchored-v3', 'width': w, 'height': h, 'fps': fps,
+    return {'schema_version': 1, 'composition': 'lean-anchored-v4-aligned', 'width': w, 'height': h, 'fps': fps,
             'duration_seconds': duration, 'voice_seconds': voice, 'tail_seconds': TAIL, 'sha256': hashlib.sha256(data).hexdigest(), 'bytes': len(data),
             'crossfade_seconds': overlap, 'ramp_seconds': ramp, 'turn_seconds': turn, 'still_motion': 'eased camera breath (max 5%)', 'caption_count': len(captions),
             'scenes': [{'image_id': i['image_id'], 'start_seconds': i['start'], 'end_seconds': i['end'], 'rule': i['plan']['rule'],
-                        'clip_seconds': i['plan']['clip_seconds'], 'parts': [asdict(s) for s in i['plan']['segments']]} for i in items],
+                        'clip_seconds': i['plan']['clip_seconds'], 'alignment': i['alignment'], 'parts': [asdict(s) for s in i['plan']['segments']]} for i in items],
             'joins': joins, 'join_threshold': join_threshold, 'flagged_joins': sum(j['flagged'] for j in joins),
             'source_order': [i['image_id'] for i in items], 'loop': False, 'rewind': 'returns to anchor', 'letterbox': False,
             'elapsed_seconds': round(time.monotonic() - started, 2)}

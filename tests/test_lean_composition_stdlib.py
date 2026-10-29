@@ -11,10 +11,15 @@ from pathlib import Path
 
 from PIL import Image
 
-from byron_video.lean_composition import (DEPTH, FADE, ONE_PASS_SCENE, RAMP, TURN, TWO_MOMENTS_SCENE, camera, drift_at,
+from byron_video.lean_composition import (DEPTH, FADE, ONE_PASS_SCENE, RAMP, TURN, TWO_MOMENTS_SCENE, align_still, camera, drift_at,
                                           frame_difference, scene_plan, state_at, still_frame, still_windows)
 
 ANCHOR_TOLERANCE = 1e-6
+
+
+def still_frame_from(image, size):
+    from PIL import ImageOps
+    return ImageOps.fit(image, size, method=Image.Resampling.LANCZOS, centering=(.5, .5))
 
 
 def samples(s, count=200):
@@ -105,6 +110,26 @@ class SceneRuleChecks(unittest.TestCase):
         self.assertIs(camera(base), base); self.assertEqual(camera(base, 1.05, 1, -1).size, base.size)
         self.assertGreater(frame_difference(camera(base, 1.05, 1, -1), base), 0)
 
+    def test_still_is_framed_like_the_clip_anchor(self):
+        import random
+        rng = random.Random(7)
+        painting = Image.new('RGB', (900, 1600), 'black')
+        from PIL import ImageDraw
+        draw = ImageDraw.Draw(painting)
+        for _ in range(120):
+            x, y, r = rng.randrange(900), rng.randrange(1600), rng.randrange(10, 80)
+            draw.ellipse((x - r, y - r, x + r, y + r), fill=tuple(rng.randrange(256) for _ in range(3)))
+        # The video model enlarges the painting ~1.5% and nudges it: the clip anchor shows that framing.
+        bw, bh = 900 / 1.015, 1600 / 1.015
+        cx, cy = 450 + 6, 800 - 4
+        anchor = painting.transform((270, 480), Image.Transform.EXTENT, (cx - bw / 2, cy - bh / 2, cx + bw / 2, cy + bh / 2), Image.Resampling.BICUBIC)
+        still, info = align_still(painting, anchor)
+        self.assertEqual(info['used'], 'aligned'); self.assertEqual(still.size, (270, 480))
+        self.assertAlmostEqual(info['scale'], 1.015, delta=0.004)
+        self.assertLess(info['after'], info['before'] / 3)
+        same, info = align_still(painting, still_frame_from(painting, (270, 480)))
+        self.assertLessEqual(info['after'], info['before'])  # Never worse than the plain crop.
+
     def test_join_difference_metric_and_still_is_the_original(self):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / 'painting.png'
@@ -147,7 +172,8 @@ class LeanRenderChecks(unittest.TestCase):
                 {'image_id': 'painting_0002', 'start_seconds': 6.65, 'end_seconds': duration}]}
             manifest = compose_film(root=root, narration_wav=audio, report=report, timing=timing, scenes=scenes,
                                     output=root / 'film' / 'film.mp4', join_threshold=5)
-            self.assertEqual(manifest['composition'], 'lean-anchored-v3')
+            self.assertEqual(manifest['composition'], 'lean-anchored-v4-aligned')
+            self.assertTrue(all(s['alignment']['used'] in ('aligned', 'cover_crop') for s in manifest['scenes']))
             self.assertEqual((manifest['width'], manifest['height']), (1080, 1920))
             self.assertEqual(manifest['source_order'], ['painting_0001', 'painting_0002'])
             self.assertEqual([s['rule'] for s in manifest['scenes']], ['short', 'short'])
