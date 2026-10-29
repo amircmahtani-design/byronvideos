@@ -5,7 +5,7 @@ import unittest
 from byron_video.deployment_plan import validate_config
 from byron_video.elevenlabs_adapter import plan_requests
 from byron_video.hosted_control import IdempotencyConflict
-from byron_video.lean_film import (LeanBudget, LeanBudgetExceeded, LeanJobStore, LeanLedger, LeanStarter, allocations,
+from byron_video.lean_film import (STALE_SECONDS, STOPPED, LeanBudget, LeanBudgetExceeded, LeanBusy, LeanJobStore, LeanLedger, LeanStarter, allocations,
     estimate_cents, freeze_inputs, lean_settings, motion_approval, motion_cents, motion_operation, narration_profile, owner_for)
 from byron_video.provider_execution import (FAL_IMAGE_ENDPOINT, FAL_QUEUE_ORIGIN, ProviderOutcomeUnknown,
     _narration_operations, plan_anchored_motion, submit_motion_once)
@@ -170,6 +170,21 @@ class LeanFilmChecks(unittest.TestCase):
         done = store.complete(OWNER, job.id, {'video': ref, 'duration_seconds': 12.5})
         self.assertEqual(done.public()['download_url'], f'/api/jobs/{job.id}/video')
         self.assertEqual(store.fail(OWNER, job.id, 'late failure').status, 'complete')
+
+    def test_one_film_at_a_time_until_it_ends_or_goes_silent(self):
+        now = [1_000_000]
+        store = LeanJobStore(self.client, project_id=PROJECT, namespace=NS, transaction_runner=self.client.run, clock=lambda: now[0])
+        first, _ = store.reserve(OWNER, KEY, 'b' * 64, inputs_builder(self.config))
+        with self.assertRaises(LeanBusy): store.reserve(OWNER, 'lean_request_000000002', 'c' * 64, inputs_builder(self.config))
+        self.assertEqual(store.reserve(OWNER, KEY, 'b' * 64, inputs_builder(self.config))[0].id, first.id)  # Same request still recovers.
+        store.fail(OWNER, first.id, 'Stopped at the narration (ElevenLabs): synthetic.')
+        second, created = store.reserve(OWNER, 'lean_request_000000002', 'c' * 64, inputs_builder(self.config))
+        self.assertTrue(created)
+        self.assertEqual(second.public(now=now[0])['status'], 'queued')
+        now[0] += STALE_SECONDS + 1  # The renderer stopped without reporting back.
+        self.assertEqual((second.public(now=now[0])['status'], second.public(now=now[0])['message']), ('failed', STOPPED))
+        third, created = store.reserve(OWNER, 'lean_request_000000003', 'd' * 64, inputs_builder(self.config))
+        self.assertTrue(created and third.id != second.id)
 
     def test_cloud_run_start_request_shape_and_uncertain_outcome(self):
         calls = []

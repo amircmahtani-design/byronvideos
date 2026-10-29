@@ -7,6 +7,7 @@ Mutations require the owner session, exact Origin and session CSRF token (as adm
 """
 from dataclasses import asdict
 import re
+import time
 
 from fastapi import Header, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
@@ -19,7 +20,7 @@ from .engine import narration_text, validate_script
 from .hosted_control import (IdempotencyConflict, JOB_ID, SAFE_ID, PrivateControlMiddleware, Submission, VerifiedImage,
                              digest, invoke, require)
 from .hosted_uploads import KEY, MAX_IMAGE_BYTES, batch_fingerprint, prepare_image
-from .lean_film import LeanBudgetExceeded, dollars, estimate_cents, freeze_inputs, narration_profile
+from .lean_film import LeanBudgetExceeded, LeanBusy, dollars, estimate_cents, freeze_inputs, narration_profile
 
 EXPIRED = 'The studio setup has expired. Ask the owner to renew it; nothing was started or charged.'
 
@@ -162,6 +163,8 @@ def install_lean_routes(app, *, access, owner_id, config, settings, jobs, ledger
             job, created = jobs.reserve(owner_id, key, request_hash, build)
         except IdempotencyConflict:
             raise HTTPException(409, 'This submission key already belongs to a different film.') from None
+        except LeanBusy as exc:
+            raise HTTPException(423, str(exc)) from None  # A definite refusal: nothing reserved or started.
         except Exception:
             raise HTTPException(503, 'The film could not be saved. Ask the owner to check this reference; do not submit again.') from None
         if not created:
@@ -195,7 +198,7 @@ def install_lean_routes(app, *, access, owner_id, config, settings, jobs, ledger
     async def status(request: Request, job_id: str):
         await owner(request)
         job = await run_in_threadpool(owned, job_id)
-        return job.public()
+        return job.public(now=time.time())  # A silently stopped film is reported as stopped, not waiting.
 
     @app.get('/api/submissions/{key}')
     async def recover(request: Request, key: str):

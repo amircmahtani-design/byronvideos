@@ -13,7 +13,9 @@ import json
 import os
 from pathlib import Path
 import secrets
+import sys
 import time
+import traceback
 from types import SimpleNamespace
 
 from PIL import Image, ImageOps
@@ -32,6 +34,39 @@ UNCERTAIN = ('A paid step could not be confirmed, so it was not repeated and not
 TOO_SLOW = ('The painting animations took longer than expected. Nothing was charged twice; '
             'ask the studio owner to run this same film again to collect them.')
 GENERIC = 'Your film could not be finished. Nothing was charged twice. Ask the studio owner to check this film.'
+# Plain words for the owner: where it stopped and what to fix. Never keys, text or URLs.
+STAGES = {'preparing': 'while getting ready', 'narration': 'at the narration (ElevenLabs)',
+          'animation': 'at the painting animations (fal)', 'assembly': 'while putting the film together',
+          'saving': 'while saving the finished film'}
+NAMES = {'elevenlabs': 'ElevenLabs', 'fal': 'fal'}
+REASONS = {
+    'no_credit': '{p} says the account is out of credit or money. Top it up, then try again.',
+    'key_rejected': '{p} did not accept the saved key, or the key is missing a permission. Save a new key in Administrator.',
+    'key_unavailable': 'the saved {p} key could not be read. Save the key again in Administrator.',
+    'voice_missing': 'ElevenLabs could not find the chosen narrator voice. Check the Voice ID in Administrator.',
+    'busy': '{p} is busy or limiting requests right now. Wait a few minutes, then try again.',
+    'provider_down': '{p} had a problem on their side. Wait a few minutes, then try again.',
+    'timeout': '{p} took too long to answer.',
+    'network': 'the studio could not reach {p}.',
+    'rejected': '{p} refused the request.',
+    'unverified': 'the answer from {p} could not be checked.',
+    'saving': '{p} answered, but the studio could not save or check the result.',
+}
+
+
+def explain(stage, error):
+    """One plain sentence naming the step, the service and the cause, plus a short code for Amir."""
+    where = STAGES.get(stage, 'while making the film')
+    if isinstance(error, ProviderOutcomeUnknown):
+        name = NAMES.get(error.provider or '', error.provider or 'the service')
+        cause = REASONS.get(error.reason, REASONS['unverified']).format(p=name)
+        code = ' '.join(x for x in (error.provider or '', error.reason, error.detail) if x)
+    elif isinstance(error, LeanTimeout):
+        return TOO_SLOW
+    else:
+        cause, code = 'something went wrong inside the studio.', type(error).__name__[:40]
+    message = f'Stopped {where}: {cause} Nothing was charged twice. (Code: {code})'
+    return message if len(message) <= 300 else message[:297] + '...'
 
 
 class LeanTimeout(RuntimeError):
@@ -90,18 +125,16 @@ class LeanPipeline:
         job = self.jobs.begin(self.owner, job_id)
         if job.status == 'complete':
             return job
-        ledger = None
+        ledger = None; self.stage = 'preparing'
         try:
             ledger = self.ledger_factory(job.id)
             return self._run(job, ledger)
-        except ProviderOutcomeUnknown:
-            message = UNCERTAIN
         except LeanBudgetExceeded as error:
             message = str(error)
-        except LeanTimeout:
-            message = TOO_SLOW
-        except Exception:
-            message = GENERIC
+        except Exception as error:
+            message = explain(self.stage, error)
+            print(json.dumps({'job_id': job.id, 'failed_stage': self.stage, 'message': message}), file=sys.stderr)
+            traceback.print_exc()  # Our own code paths only; provider errors carry no keys or bodies.
         self._cost(job, ledger)
         return self.jobs.fail(self.owner, job.id, message)
 
@@ -123,11 +156,14 @@ class LeanPipeline:
         self.check()
         ledger.fund(inputs['plan_id'], inputs['plan_sha256'], inputs['allocations'])  # Idempotent whole-film reservation.
         journal = ledger.operations(inputs['plan_id'], inputs['plan_sha256'], self.check)
+        self.stage = 'narration'
         self._progress(job, 10, 'Recording the narration…')
         report, audio = self._narration(job, journal, root)
         self._cost(job, ledger)
+        self.stage = 'animation'
         clips = self._animation(job, journal, root)
         self._cost(job, ledger)
+        self.stage = 'assembly'
         self._progress(job, 85, 'Putting your film together…')
         snapshot = {'images': [{'id': x['id'], 'sha256': x['sha256']} for x in inputs['images']], 'input_order': inputs['input_order'],
                     'narrated_text': inputs['narrated_text'], 'processing_plan': {'narration_profile': inputs['narration_profile']}}
@@ -136,6 +172,7 @@ class LeanPipeline:
         output = root / 'film' / 'film.mp4'
         manifest = self.compose(root=root, narration_wav=audio, report=report, timing=timing, scenes=scenes, output=output,
                                 join_threshold=inputs['settings']['join_difference_threshold'])
+        self.stage = 'saving'
         self._progress(job, 95, 'Saving your film…')
         video = self.objects.put_file(self.owner, job.id, 'film', output, 'video/mp4')
         saved = self.objects.put(self.owner, job.id, 'film-manifest', canonical({**manifest, 'timing': timing}).encode(), 'application/json')

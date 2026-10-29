@@ -41,7 +41,76 @@ def _wall_deadline(client, seconds, clock):
 
 
 class ProviderOutcomeUnknown(RuntimeError):
-    """Reservation remains consumed; reconcile, never automatically submit again."""
+    """Reservation remains consumed; reconcile, never automatically submit again.
+
+    provider/reason/detail say plainly which service and what kind of failure, for the
+    owner's status message only; they never contain keys, text, URLs or response bodies.
+    """
+    def __init__(self, message='', *, provider=None, reason='unverified', detail=''):
+        super().__init__(message)
+        self.provider, self.reason, self.detail = provider, reason, detail
+
+
+class _Refused(Exception):
+    """A definite provider HTTP refusal (status plus a short, bounded body sample)."""
+    def __init__(self, status, body):
+        super().__init__(status)
+        self.status, self.body = status, body
+
+
+def _read_sample(response, limit=4096):
+    data = bytearray()
+    try:
+        for chunk in response.iter_bytes():
+            data.extend(chunk)
+            if len(data) >= limit:
+                break
+    except Exception:
+        pass
+    return bytes(data[:limit])
+
+
+def _refusal(status, body):
+    """Map a provider HTTP refusal to a plain reason and a short safe code."""
+    text = body.decode('utf-8', 'replace').lower()
+    code = ''
+    try:
+        detail = json.loads(body).get('detail')
+        value = detail.get('status') or detail.get('code') if isinstance(detail, dict) else None
+        if isinstance(value, str) and re.fullmatch(r'[a-z0-9_]{1,40}', value):
+            code = value
+    except Exception:
+        pass
+    if status == 402 or any(w in text for w in ('quota_exceeded', 'insufficient', 'exhausted balance', 'balance', 'credit', 'payment_required')):
+        reason = 'no_credit'
+    elif 'voice_not_found' in text or (status == 404 and 'voice' in text):
+        reason = 'voice_missing'
+    elif status in (401, 403):
+        reason = 'key_rejected'
+    elif status == 429:
+        reason = 'busy'
+    elif status >= 500:
+        reason = 'provider_down'
+    else:
+        reason = 'rejected'
+    return reason, f'{status} {code}'.strip()
+
+
+def _outcome(error, provider, message):
+    """Keep the never-retry contract while saying which service failed and why."""
+    if isinstance(error, ProviderOutcomeUnknown):
+        return ProviderOutcomeUnknown(message, provider=error.provider or provider, reason=error.reason, detail=error.detail)
+    if isinstance(error, _Refused):
+        reason, detail = _refusal(error.status, error.body)
+        return ProviderOutcomeUnknown(message, provider=provider, reason=reason, detail=detail)
+    name = type(error).__name__
+    if isinstance(error, TimeoutError) or 'Timeout' in name:
+        reason = 'timeout'
+    elif isinstance(error, ConnectionError) or any(w in name for w in ('Connect', 'Network', 'Protocol', 'Transport', 'ReadError', 'WriteError')):
+        reason = 'network'
+    else:
+        reason = 'unverified'
+    return ProviderOutcomeUnknown(message, provider=provider, reason=reason, detail=name[:40])
 
 
 @dataclass(frozen=True)
@@ -138,9 +207,12 @@ class ElevenLabsHTTPTransport:
             if factory is None:
                 import httpx
                 factory = httpx.Client
-            key = self._key_reader()
-            if not isinstance(key,str) or not 16 <= len(key) <= 512 or not key.isascii() or any(c.isspace() for c in key):
-                raise ValueError()
+            try:
+                key = self._key_reader()
+                if not isinstance(key,str) or not 16 <= len(key) <= 512 or not key.isascii() or any(c.isspace() for c in key):
+                    raise ValueError()
+            except Exception:
+                raise ProviderOutcomeUnknown(provider='elevenlabs', reason='key_unavailable') from None
             # ElevenLabs sends nothing until the whole span is recorded (tens of seconds for a long
             # story), so the socket wait must cover the full bounded budget, not a short idle limit.
             with factory(timeout=self._timeout, follow_redirects=False, trust_env=False) as client, _wall_deadline(client,self._timeout,self._clock) as check_deadline:
@@ -149,7 +221,7 @@ class ElevenLabsHTTPTransport:
                     # No automatic retry, even for 429/5xx or ambiguous redirect.
                     if response.headers.get('content-encoding','identity').lower() != 'identity':raise ValueError()
                     if response.status_code != 200:
-                        raise ValueError()
+                        raise _Refused(response.status_code, _read_sample(response))
                     request_id = response.headers.get('request-id')
                     if not isinstance(request_id,str) or not REQUEST_ID.fullmatch(request_id):
                         raise ValueError()
@@ -165,8 +237,8 @@ class ElevenLabsHTTPTransport:
                     if not payload:
                         raise ValueError()
                     return WireResponse(request_id,bytes(payload))
-        except Exception:
-            raise ProviderOutcomeUnknown('Provider outcome could not be verified. Keep the reservation and reconcile; do not retry.') from None
+        except Exception as error:
+            raise _outcome(error, 'elevenlabs', 'Provider outcome could not be verified. Keep the reservation and reconcile; do not retry.') from None
 
 
 class FileResponseStore:
@@ -299,6 +371,9 @@ def execute_narration_once(*, owner_id, job_id, text, profile, approval, journal
             journal.arm(op,binding,reservation,approval.job_cap_cents)
             try:
                 wire = transport(request)  # Exactly one call. Any exception retains reservation.
+            except Exception as error:
+                raise _outcome(error, 'elevenlabs', 'Provider outcome could not be verified. Keep the reservation and reconcile; do not retry.') from None
+            try:
                 receipt = response_store.write_response(op,wire)
                 parsed = parse_response(request['body']['text'],wire.payload,wire.request_id)
                 if (receipt.get('request_id') != wire.request_id or receipt.get('response_sha256') != hashlib.sha256(wire.payload).hexdigest()
@@ -312,8 +387,9 @@ def execute_narration_once(*, owner_id, job_id, text, profile, approval, journal
                            'exact_text_sha256':hashlib.sha256(parsed['exact_text'].encode()).hexdigest(),
                            'words_sha256':fingerprint(parsed['words']),'media_verified':False}
                 journal.record(op,binding,receipt)
-            except Exception:
-                raise ProviderOutcomeUnknown('Provider result is not durably verified. Keep the reservation and reconcile; do not retry.') from None
+            except Exception as error:  # ElevenLabs answered; saving or checking its answer failed here.
+                raise ProviderOutcomeUnknown('Provider result is not durably verified. Keep the reservation and reconcile; do not retry.',
+                                             provider='elevenlabs', reason='saving', detail=type(error).__name__[:40]) from None
         results.append(parsed)
     return {'requests':requests,'responses':results,'plan_sha256':fingerprint(requests),
             'reservation_cents':sum(approval.reservations_cents),'media_verified':False,'live_release':False}
@@ -425,8 +501,11 @@ class FalQueueTransport:
                 factory=httpx.Client
             headers={'Accept-Encoding':'identity'}
             if not media:
-                key=self._key_reader()
-                if not isinstance(key,str) or not 8<=len(key)<=512 or not key.isascii() or any(c.isspace() for c in key):raise ValueError()
+                try:
+                    key=self._key_reader()
+                    if not isinstance(key,str) or not 8<=len(key)<=512 or not key.isascii() or any(c.isspace() for c in key):raise ValueError()
+                except Exception:
+                    raise ProviderOutcomeUnknown(provider='fal',reason='key_unavailable') from None
                 headers={**headers,**FAL_HEADERS,'Authorization':'Key '+key,'Accept':'application/json'}
             limit=FAL_MAX_MEDIA_BYTES if media else 1024*1024
             with factory(timeout=10,follow_redirects=False,trust_env=False) as client, _wall_deadline(client,120 if media else 60,self._clock) as check_deadline:
@@ -436,7 +515,7 @@ class FalQueueTransport:
                     if not callable(submission_check) or submission_check() is not True:raise ValueError('Final motion authorization unavailable.')
                 with client.stream(method,url,**options) as result:
                     if result.headers.get('content-encoding','identity').lower() != 'identity':raise ValueError()
-                    if result.status_code not in ({200} if media or method=='GET' else {200,202}):raise ValueError()
+                    if result.status_code not in ({200} if media or method=='GET' else {200,202}):raise _Refused(result.status_code,_read_sample(result))
                     length=result.headers.get('content-length')
                     if length is not None and (not length.isdigit() or int(length)>limit):raise ValueError()
                     data=bytearray()
@@ -449,8 +528,8 @@ class FalQueueTransport:
                     value=json.loads(data,parse_constant=lambda _:(_ for _ in ()).throw(ValueError()))
                     if not isinstance(value,dict):raise ValueError()
                     return value
-        except Exception:
-            raise ProviderOutcomeUnknown('fal outcome could not be verified. Reconcile the original reference; do not resubmit.') from None
+        except Exception as error:
+            raise _outcome(error,'fal','fal outcome could not be verified. Reconcile the original reference; do not resubmit.') from None
 
     def submit(self,request):
         request=_motion_request(request)
@@ -458,7 +537,7 @@ class FalQueueTransport:
         try:
             return validate_fal_handle({'endpoint':FAL_IMAGE_ENDPOINT,**{k:result[k] for k in ('request_id','response_url','status_url')}})
         except Exception:
-            raise ProviderOutcomeUnknown('fal submission receipt could not be verified; do not resubmit.') from None
+            raise ProviderOutcomeUnknown('fal submission receipt could not be verified; do not resubmit.',provider='fal',detail='receipt') from None
 
     def submit_authorized(self,request,submission_check):
         request=_motion_request(request)
@@ -470,7 +549,7 @@ class FalQueueTransport:
         handle=validate_fal_handle(handle)
         result=self._request(handle['status_url'],'GET')
         if result.get('request_id')!=handle['request_id'] or result.get('status') not in {'IN_QUEUE','IN_PROGRESS','COMPLETED'}:
-            raise ProviderOutcomeUnknown('Queue status was not verified; no new submission was made.')
+            raise ProviderOutcomeUnknown('Queue status was not verified; no new submission was made.',provider='fal',detail='status '+str(result.get('status'))[:20])
         return result['status']
 
     def result(self,handle):
@@ -479,7 +558,7 @@ class FalQueueTransport:
         video=result.get('video')
         if (not isinstance(video,dict) or not _fal_media_url(video.get('url')) or type(video.get('file_size')) is not int
                 or not 0<video['file_size']<=FAL_MAX_MEDIA_BYTES or video.get('content_type') not in {'video/mp4','application/octet-stream'}):
-            raise ProviderOutcomeUnknown('Queue result was not verified; no new submission was made.')
+            raise ProviderOutcomeUnknown('Queue result was not verified; no new submission was made.',provider='fal',detail='result')
         return {'url':video['url'],'bytes':video['file_size'],'request_id':handle['request_id'],'media_verified':False}
 
     def download(self,result):
@@ -513,7 +592,11 @@ def submit_motion_once(*,owner_id,job_id,request,approval,journal,transport):
     journal.arm(operation,binding,approval.reservations_cents[0],approval.job_cap_cents)
     try:
         handle=validate_fal_handle(transport.submit(request))
+    except Exception as error:
+        raise _outcome(error,'fal','Motion submission is uncertain. Keep its reservation; do not resubmit.') from None
+    try:
         journal.record(operation,binding,handle)
         return handle
-    except Exception:
-        raise ProviderOutcomeUnknown('Motion submission is uncertain. Keep its reservation; do not resubmit.') from None
+    except Exception as error:  # fal accepted it; recording the receipt failed here.
+        raise ProviderOutcomeUnknown('Motion submission is uncertain. Keep its reservation; do not resubmit.',
+                                     provider='fal',reason='saving',detail=type(error).__name__[:40]) from None

@@ -61,7 +61,7 @@ export async function submitHosted(snapshot, capability, send, checkpoint) {
     for (const file of snapshot.files) form.append('images', file, file.name);
     let response = await send('/api/uploads', {method:'POST', headers, body:form, credentials:'same-origin'});
     // Conflict can represent an existing operation; never unlock it as a new request.
-    definiteRejection = [400,401,403,413,415,422].includes(response.status);
+    definiteRejection = [400,401,403,413,415,422,423].includes(response.status);
     let data = await response.json();
     if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : 'Private upload was not accepted.');
     definiteRejection = false;
@@ -72,7 +72,7 @@ export async function submitHosted(snapshot, capability, send, checkpoint) {
     response = await send('/api/jobs', {method:'POST', credentials:'same-origin',
       headers:{...headers, 'Content-Type':'application/json'},
       body:JSON.stringify({script:snapshot.script, images, voice_id:snapshot.voice.id})});
-    definiteRejection = [400,401,403,413,415,422].includes(response.status);
+    definiteRejection = [400,401,403,413,415,422,423].includes(response.status);  // 423: another film is still being made.
     data = await response.json();
     if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : 'Film submission could not be confirmed.');
     definiteRejection = false;

@@ -171,9 +171,14 @@ function showJob(id) {
   ui['job-title'].textContent = 'Preparing your film'; ui['job-message'].textContent = 'Waiting for the renderer…'; ui.progress.removeAttribute('value');
 }
 function failedJob(message) {
-  stopPolling(); setBusy(false); saveActiveJob(null); activeJob = null;
-  ui['job-title'].textContent = 'Your film could not be finished'; ui['job-message'].textContent = message;
-  ui.progress.hidden = true; ui['job-note'].textContent = ui.script.value || paintings.length ? 'Your script and chosen paintings are still here. Correct the problem, then press Convert again.' : 'Paste your script and choose your paintings again, then press Convert.';
+  // Stay locked (and remembered across reloads) until the owner deliberately chooses to try again.
+  stopPolling(); activeJob = null; setBusy(true);
+  ui['job-title'].textContent = 'Your film stopped'; ui['job-message'].textContent = message;
+  ui.progress.hidden = true;
+  ui['job-note'].textContent = 'Convert is locked so nothing runs twice. Fix the problem named above, then press “I’ve fixed it — try again”. ' +
+    (ui.script.value || paintings.length ? 'Your story and paintings are still here.' : 'You will need to paste your story and choose your paintings again.');
+  ui['new-film'].textContent = 'I’ve fixed it — try again'; ui['new-film'].hidden = false;
+  ui.convert.textContent = 'Locked — see below';
 }
 async function pollJob() {
   if (!activeJob) return;
@@ -208,7 +213,7 @@ async function pollJob() {
     } else if (['complete','completed','done','succeeded'].includes(job.status) || isPrivateDraft(job)) {
       const download = safeDownloadURL(job.download_url, location.origin, id);
       if (!download) throw new Error('The renderer finished but did not provide a valid local download. Check film status again.');
-      stopPolling(); ui['job-title'].textContent = isPrivateDraft(job) ? 'Your private DRAFT preview is ready' : 'Your film is ready'; ui.download.innerHTML = isPrivateDraft(job) ? 'Download DRAFT preview <span aria-hidden="true">↓</span>' : 'Download MP4 <span aria-hidden="true">↓</span>'; ui.download.download = isPrivateDraft(job) ? 'byron-DRAFT-' + id + '.mp4' : 'byron-film.mp4'; ui.progress.value = 100; ui.download.href = download; ui.download.hidden = false; ui['new-film'].hidden = false;
+      stopPolling(); ui['job-title'].textContent = isPrivateDraft(job) ? 'Your private DRAFT preview is ready' : 'Your film is ready'; ui.download.innerHTML = isPrivateDraft(job) ? 'Download DRAFT preview <span aria-hidden="true">↓</span>' : 'Download MP4 <span aria-hidden="true">↓</span>'; ui.download.download = isPrivateDraft(job) ? 'byron-DRAFT-' + id + '.mp4' : 'byron-film.mp4'; ui.progress.value = 100; ui.download.href = download; ui.download.hidden = false; ui['new-film'].textContent = 'Make another film'; ui['new-film'].hidden = false;
       ui['job-note'].textContent = completedFilmNote(job);
       // Keep the form locked until the operator chooses to make another film.
       if (isPrivateDraft(job)) await refreshExactFilm(id);
@@ -364,6 +369,7 @@ ui['new-film'].addEventListener('click', () => {
   if(exactPending || exactWorking)return;
   clearTimeout(exactTimer);exactStatus=null;ui['exact-actions'].hidden=true;
   stopPolling(); activeJob = null; saveActiveJob(null); setBusy(false); ui.job.hidden = true; ui.download.removeAttribute('href'); showError(); ui.script.focus(); checkRenderer();
+  ui['new-film'].textContent = 'Make another film'; ui.convert.textContent = 'Convert to film →';
 });
 window.addEventListener('pagehide', () => {stopPolling();clearTimeout(exactTimer);});
 window.addEventListener('pageshow', event => { if (event.persisted && activeJob) pollJob(); });

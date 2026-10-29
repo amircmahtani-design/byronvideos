@@ -9,7 +9,7 @@ from pathlib import Path
 
 from byron_video.elevenlabs_adapter import fingerprint
 from byron_video.lean_film import LeanJobStore, LeanLedger
-from byron_video.lean_worker import GENERIC, UNCERTAIN, LeanPipeline, motion_anchor
+from byron_video.lean_worker import LeanPipeline, explain, motion_anchor
 from byron_video.provider_execution import FileResponseStore, WireResponse, execute_narration_once
 from test_cloud_journal_stdlib import Client, PROJECT
 from test_hosted_uploads_stdlib import image_bytes
@@ -106,7 +106,9 @@ class LeanWorkerChecks(unittest.TestCase):
     def test_rerun_skips_verified_steps_and_never_pays_twice(self):
         eleven, fal = ElevenLabs(), Fal()
         failed = self.pipeline(eleven, fal).run(self.job.id)
-        self.assertEqual((failed.status, failed.message), ('failed', GENERIC))
+        self.assertEqual(failed.status, 'failed')
+        self.assertTrue(failed.message.startswith('Stopped while putting the film together: something went wrong inside the studio.'))
+        self.assertIn('(Code: RuntimeError)', failed.message)
         self.assertEqual(eleven.calls, 1); self.assertEqual(fal.submitted, self.job.inputs['input_order'])
         steps = self.store.get(OWNER, self.job.id).steps
         self.assertTrue({'narration', 'clip_1', 'clip_4', 'anchor_1'} <= set(steps))
@@ -124,9 +126,26 @@ class LeanWorkerChecks(unittest.TestCase):
         eleven = ElevenLabs(fail=True); fal = Fal()
         for _ in range(2):
             job = self.pipeline(eleven, fal).run(self.job.id)
-            self.assertEqual((job.status, job.message), ('failed', UNCERTAIN))
+            self.assertEqual(job.status, 'failed')
+            self.assertTrue(job.message.startswith('Stopped at the narration (ElevenLabs):'), job.message)
         self.assertEqual(eleven.calls, 1); self.assertEqual(fal.submitted, [])
         self.assertGreater(self.store.get(OWNER, self.job.id).public()['uncertain_cost_cents'], 0)
+
+    def test_failure_message_names_step_service_and_cause(self):
+        from byron_video.provider_execution import ProviderOutcomeUnknown, _outcome, _Refused
+        cases = [(_Refused(401, b'{"detail":{"status":"quota_exceeded","message":"x"}}'), 'elevenlabs', 'out of credit', '401 quota_exceeded'),
+                 (_Refused(403, b'{"detail":"User is locked. Reason: Exhausted balance."}'), 'fal', 'out of credit', '403'),
+                 (_Refused(401, b'{"detail":{"status":"missing_permissions"}}'), 'elevenlabs', 'did not accept the saved key', 'missing_permissions'),
+                 (_Refused(404, b'{"detail":{"status":"voice_not_found"}}'), 'elevenlabs', 'narrator voice', 'voice_not_found'),
+                 (_Refused(429, b'{}'), 'fal', 'busy', '429'), (_Refused(503, b''), 'fal', 'on their side', '503'),
+                 (TimeoutError(), 'elevenlabs', 'too long', 'timeout')]
+        for error, provider, words, code in cases:
+            with self.subTest(code=code):
+                outcome = _outcome(error, provider, 'x')
+                self.assertIsInstance(outcome, ProviderOutcomeUnknown)
+                message = explain('narration' if provider == 'elevenlabs' else 'animation', outcome)
+                self.assertIn(words, message); self.assertIn(code, message); self.assertLessEqual(len(message), 300)
+                self.assertIn('ElevenLabs' if provider == 'elevenlabs' else '(fal)', message)
 
     def test_small_original_is_the_exact_anchor(self):
         data = image_bytes(1)

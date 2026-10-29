@@ -41,6 +41,17 @@ class LeanBudgetExceeded(ValueError):
     """Plain-English refusal; nothing was reserved, started or charged."""
 
 
+class LeanBusy(ValueError):
+    """Another film is still being made; nothing was reserved, started or charged."""
+
+
+# The renderer job times out at 1800 s; a film silent for longer has stopped without reporting back.
+STALE_SECONDS = 2100
+BUSY = 'A film is already being made. Wait for it to finish or fail before starting another. Nothing was started or charged.'
+STOPPED = ('Stopped while the film was being made: the film job stopped without reporting back '
+           '(it may have run out of time or memory). Nothing was charged twice. (Code: worker stopped)')
+
+
 def dollars(cents):
     return f'${cents // 100}.{cents % 100:02}'
 
@@ -170,11 +181,15 @@ class LeanJob:
     request_sha256 = property(lambda self: self.doc['request_sha256'])
     key_sha256 = property(lambda self: self.doc['key_sha256'])
 
-    def public(self):
+    def stalled(self, now):
+        return self.status in ('queued', 'running') and now - self.doc['updated_at'] > STALE_SECONDS
+
+    def public(self, now=None):
         """Owner status; never the script, storage names, provider IDs or keys."""
         expected, spent = self.inputs['estimate_cents'], self.cost.get('spent_cents', 0)
         uncertain = self.cost.get('uncertain_cents', 0)
-        value = {'id': self.id, 'status': self.status, 'progress': self.progress, 'message': self.message,
+        status, message = ('failed', STOPPED) if now is not None and self.stalled(now) else (self.status, self.message)
+        value = {'id': self.id, 'status': status, 'progress': self.progress, 'message': message,
                  'mode': 'hosted', 'live_release': True, 'lean_generation': True,
                  'expected_cost_cents': expected, 'actual_cost_cents': spent, 'uncertain_cost_cents': uncertain,
                  'cost_message': f'Estimated up to {dollars(expected)}; used so far {dollars(spent + uncertain)}.'}
@@ -240,6 +255,16 @@ class LeanJobStore(_FirestoreBoundary):
                 if existing.request_sha256 != request_sha256:
                     raise IdempotencyConflict('This submission key already belongs to different input.')
                 return existing, False
+            # One film at a time per owner, even from another tab or device.
+            active_ref = self._doc(self._owner(owner_id) + '/lean_state/active')
+            active = self._read(active_ref, tx)
+            if active is not None:
+                other = self._job(self._read(self._job_ref(owner_id, active['job_id']), tx), owner_id, active['job_id'])
+                if other is not None and other.status in ('queued', 'running') and not other.stalled(now):
+                    raise LeanBusy(BUSY)
+                tx.update(active_ref, {'job_id': job_id})
+            else:
+                tx.create(active_ref, {'job_id': job_id})
             tx.create(self._job_ref(owner_id, job_id), doc)
             tx.create(self._request_ref(owner_id, key), dict(job_id=job_id, request_sha256=request_sha256,
                                                               owner_id=owner_id, key_sha256=_hash(key)))
