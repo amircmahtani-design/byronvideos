@@ -139,6 +139,22 @@ async function checkRenderer() {
 }
 function stopPolling() { clearTimeout(timer); timer = null; pollController?.abort(); pollController = null; }
 function saveActiveJob(id) { try { if (id) { sessionStorage.setItem('byron-active-job', id); sessionStorage.setItem('byron-active-job-mode', hostedJob ? 'hosted' : 'local'); } else { sessionStorage.removeItem('byron-active-job'); sessionStorage.removeItem('byron-active-job-mode'); } } catch { /* Private browsing may disable storage. */ } }
+// A finished film stays downloadable from this browser for a day, even after the Google sign-in (1 hour) lapses.
+const FINISHED_KEY = 'byron-finished-film', FINISHED_MS = 24 * 3600 * 1000;
+let signInNeeded = false;
+function saveFinished(id) { try { if (id) localStorage.setItem(FINISHED_KEY, JSON.stringify({id, at: Date.now()})); else localStorage.removeItem(FINISHED_KEY); } catch { /* Optional convenience only. */ } }
+function loadFinished() {
+  try { const value = JSON.parse(localStorage.getItem(FINISHED_KEY)); const id = safeJobId(value?.id);
+    if (id && Number.isFinite(value.at) && Date.now() - value.at < FINISHED_MS) return id; localStorage.removeItem(FINISHED_KEY); } catch { /* Optional convenience only. */ }
+  return null;
+}
+function askToSignIn(id) {
+  stopPolling(); signInNeeded = true; activeJob = id;
+  ui['job-title'].textContent = 'Please sign in again'; ui.progress.hidden = true; ui.download.hidden = true;
+  ui['job-message'].textContent = 'Your Google sign-in timed out (it lasts an hour). Your film is safe.';
+  ui['job-note'].textContent = 'Press Sign in, choose your Google account, and this film will be here again to download.';
+  ui.resume.textContent = 'Sign in'; ui.resume.hidden = false;
+}
 function savePending(value) {
   if (value) persistPending(sessionStorage, value); // Must round-trip before each hosted POST.
   else { try { sessionStorage.removeItem('byron-pending-submission'); } catch { /* Keep any stale checkpoint safely locked. */ } }
@@ -189,6 +205,7 @@ async function pollJob() {
   ui.resume.hidden = true;
   try {
     const response = await timedFetch(`/api/jobs/${id}`, {cache: 'no-store', signal: pollController.signal});
+    if (hostedJob && [401, 403].includes(response.status)) { askToSignIn(id); return; }
     if (response.status === 404 && hostedJob) throw new Error('This private film could not be found for your session. Ask the administrator to check it; no replacement will be submitted.');
     if (response.status === 404) { failedJob('This job is no longer available. The local server may have restarted.'); return; }
     if (!response.ok) throw new Error('The local renderer is not responding.');
@@ -218,7 +235,7 @@ async function pollJob() {
       ui['job-note'].textContent = completedFilmNote(job);
       // Keep the form locked until the operator chooses to make another film.
       if (isPrivateDraft(job)) await refreshExactFilm(id);
-      else { saveActiveJob(null); activeJob = null; }
+      else { saveActiveJob(null); activeJob = null; if (hostedJob) saveFinished(id); }
     } else if (['failed','error','cancelled'].includes(job.status)) failedJob(typeof job.message === 'string' ? job.message : 'The renderer reported an error.');
     else if (['queued','running','rendering','processing'].includes(job.status)) {
       ui['job-title'].textContent = job.status === 'queued' ? 'Your film is in the queue' : 'Making your film';
@@ -239,7 +256,19 @@ ui.images.addEventListener('change', () => {
   paintings.push(...files.map(file => ({file, url: URL.createObjectURL(file)}))); showPaintings(); showError();
 });
 ui.reconnect.addEventListener('click', () => { if (loginRequired) location.assign('/auth/login'); else checkRenderer(); });
+ui.download.addEventListener('click', async event => {
+  // The link needs a live sign-in; check first so an expired one leads to Sign in, not a failed download.
+  const id = loadFinished();
+  if (!id || !ui.download.href.endsWith(`/api/jobs/${id}/video`)) return;
+  event.preventDefault();
+  try {
+    const response = await timedFetch(`/api/jobs/${id}`, {cache: 'no-store'}, 15000);
+    if ([401, 403].includes(response.status)) { askToSignIn(id); return; }
+  } catch { /* Let the download itself report a network problem. */ }
+  location.assign(ui.download.href);
+});
 ui.resume.addEventListener('click', async () => {
+  if (signInNeeded) { if (activeJob) saveActiveJob(activeJob); location.assign('/auth/login'); return; }
   if (!pendingSubmission) return pollJob();
   if (pendingSubmission.stage !== 'job' || ui.resume.disabled) return;
   const reference = pendingSubmission.key; ui.resume.disabled = true;
@@ -369,7 +398,8 @@ ui['retry-upload'].addEventListener('click', () => {
 ui['new-film'].addEventListener('click', () => {
   if(exactPending || exactWorking)return;
   clearTimeout(exactTimer);exactStatus=null;ui['exact-actions'].hidden=true;
-  stopPolling(); activeJob = null; saveActiveJob(null); setBusy(false); ui.job.hidden = true; ui.download.removeAttribute('href'); showError(); ui.script.focus(); checkRenderer();
+  stopPolling(); activeJob = null; saveActiveJob(null); saveFinished(null); signInNeeded = false; ui.resume.textContent = 'Check film status';
+  setBusy(false); ui.job.hidden = true; ui.download.removeAttribute('href'); showError(); ui.script.focus(); checkRenderer();
   ui['new-film'].textContent = 'Make another film'; ui.convert.textContent = 'Convert to film →';
 });
 window.addEventListener('pagehide', () => {stopPolling();clearTimeout(exactTimer);});
@@ -389,6 +419,8 @@ try {
 try { restored = safeJobId(sessionStorage.getItem('byron-active-job')); hostedJob = sessionStorage.getItem('byron-active-job-mode') === 'hosted'; } catch { /* Optional recovery only. */ }
 if(exactPending && !restored) { restored=exactPending.job_id;hostedJob=true; }
 if (resumePending && !restored) { restored=resumePending.job_id; hostedJob=true; }
+const finished = loadFinished();
+if (finished && !restored) { restored = finished; hostedJob = true; }
 if (pending?.stage === 'upload') { savePending(null); pending = null; } // Upload-only: no film was requested, nothing to recover.
 if (pending) showUncertain(pending.stage, pending.key);
 else if (restored) { showJob(restored); ui['job-note'].textContent = 'Reconnecting to your previous film. Your script and files are not saved in browser storage.'; pollJob(); }
