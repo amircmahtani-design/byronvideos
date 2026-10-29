@@ -34,8 +34,9 @@ class Client:
     def post(self, url, json=None, headers=None): self.calls.append((url, json, headers)); return self.response
 
 
-def answer(starts):
-    return {'candidates': [{'content': {'parts': [{'text': json.dumps({'starts': starts})}]}}]}
+def answer(starts, first=1):
+    entries = [{'painting': i, 'shows': f'scene {i}', 'sentence': s} for i, s in enumerate([first] + list(starts), 1)]
+    return {'candidates': [{'content': {'parts': [{'text': json.dumps({'paintings': entries})}]}}]}
 
 
 class PlacementChecks(unittest.TestCase):
@@ -66,7 +67,10 @@ class PlacementChecks(unittest.TestCase):
         self.assertEqual(client.calls[0][2]['Authorization'], 'Bearer synthetic-token')
 
     def test_bad_answers_fall_back_and_never_raise(self):
-        for response in (Response(403, {}), Response(200, answer([5, 3, 7])), Response(200, answer([3, 5])),
+        skipped_count = {'candidates': [{'content': {'parts': [{'text': json.dumps({'paintings': [
+            {'painting': 2, 'shows': 'x', 'sentence': 3}, {'painting': 3, 'shows': 'y', 'sentence': 5},
+            {'painting': 4, 'shows': 'z', 'sentence': 7}]})}]}}]}  # The live off-by-one: painting 1 missing.
+        for response in (Response(403, {}), Response(200, skipped_count), Response(200, answer([5, 3, 7])), Response(200, answer([3, 5])),
                          Response(200, answer([1, 5, 7])), Response(200, {'candidates': []}), Response(200, answer([2, 3, 4]))):
             with self.subTest(response=response.content[:60]):
                 (bounds, reason), _ = self.run_place(response)
