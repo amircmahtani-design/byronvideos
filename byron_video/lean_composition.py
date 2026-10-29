@@ -1,16 +1,20 @@
 """Lean "5/2/3" portrait composition: animated clip parts around the original still.
 
-Scene rule (scene length D from the narration split, clip length L ≈ 10 s, ramp R = 1.5 s):
-  D >= 15 s         full:         clip 0–5 s at the scene start, clip 5–7 s centred on D/2,
+Scene rule (scene length D from the narration split, clip length L ≈ 10 s, ramp R = 2 s):
+  D >= 16 s         full:         clip 0–5 s at the scene start, clip 5–7 s centred on D/2,
                                   clip 7–L s ending exactly at the scene end.
-  10.5 <= D < 15 s  two_part:     clip 0–5 s at the start and clip 7–L s ending at the scene end.
+  10.5 <= D < 16 s  two_part:     clip 0–5 s at the start and clip 7–L s ending at the scene end.
   D < 10.5 s        opening_only: clip 0–a s at the start, then the still until the scene end.
 Wherever a part meets the still, the motion never stops or starts abruptly: over R seconds
 its playback speed eases smoothly to zero (or up from zero) while it dissolves into (or out
 of) the still, so the subject settles into the painting. A ramp of R output seconds uses
 R/2 clip seconds, so a part lasts (clip span) + (ramps)/2. Where a part's clip end is the
 original painting (clip t=0 starts the scene; clip t=L ends it) no ramp is needed.
-Between parts the ORIGINAL painting is shown perfectly still: no zoom, pan or drift.
+Between parts the camera "breathes": a slow drift in and back out (zoom + pan, size
+following sin²) that starts from rest exactly as the motion settles and returns to rest at
+the exact original framing just as the next motion wakes. The camera holds still while the
+painting itself moves; during each dissolve the moving frame gets the same camera framing
+as the still, so the two never ghost against each other.
 A later part never overlaps an earlier one; if it would, it starts later in the clip.
 Clip frames are read forward only (no rewind or loop); slowed frames are blended between
 neighbouring source frames instead of repeated. Every clip/still join is measured (mean
@@ -32,10 +36,14 @@ from PIL import Image, ImageChops, ImageOps, ImageStat
 from .engine import _colour, _font, draw_caption, make_captions, wrap_caption, write_srt
 from .portrait_composition import input_options, presentation, run, run_bounded, validate_words
 
-RAMP = 1.5
-FULL_SCENE = 15.0
+RAMP = 2.0
+FULL_SCENE = 16.0
 TWO_PART_SCENE = 10.5
 JOIN_SIZE = (135, 240)
+ZOOM_RATE = 0.004  # Zoom amplitude per second of still window: slow by construction.
+MAX_ZOOM = 0.05
+PAN = 0.8  # Fraction of the zoom margin used for panning; keeps the frame inside the painting.
+DIRECTIONS = ((1, -1), (-1, -1), (1, 1), (-1, 1))
 
 
 def require(ok, message):
@@ -97,7 +105,10 @@ def scene_plan(duration, clip_seconds=10.0, ramp=RAMP):
     for at, start, stop, ramp_in, ramp_out in parts:
         if at < previous:  # Start later in the clip instead of overlapping; order is kept.
             start, at = start + previous - at, previous
-        require(stop - start >= (ramp_in + ramp_out) / 2 - 1e-9 and stop > start, 'The scene is too short for its clip part.')
+        require(stop > start, 'The scene is too short for its clip part.')
+        if stop - start < (ramp_in + ramp_out) / 2:  # A shortened part eases over less time rather than failing.
+            scale = (stop - start) / ((ramp_in + ramp_out) / 2)
+            ramp_in, ramp_out = ramp_in * scale, ramp_out * scale
         segment = Segment(at, start, stop, ramp_in, ramp_out)
         segments.append(segment)
         previous = segment.end
@@ -127,11 +138,31 @@ def state_at(plan, t):
     return None, None, 0.
 
 
+def drift_at(plan, t, index):
+    """(zoom, x, y) camera breath; exactly (1, 0, 0) with zero speed at both ends of each still window."""
+    for start, stop in still_windows(plan):
+        if stop > start and start <= t <= stop:
+            e = math.sin(math.pi * (t - start) / (stop - start)) ** 2
+            dx, dy = DIRECTIONS[index % len(DIRECTIONS)]
+            return 1 + min(MAX_ZOOM, ZOOM_RATE * (stop - start)) * e, dx * e, dy * e
+    return 1., 0., 0.
+
+
 def still_frame(path, size):
-    """The original painting, cover-cropped (centre protected); shown perfectly still."""
+    """The original painting, cover-cropped (centre protected)."""
     with Image.open(path) as image:
         image = ImageOps.exif_transpose(image).convert('RGB')
         return ImageOps.fit(image, size, method=Image.Resampling.LANCZOS, centering=(.5, .5))
+
+
+def camera(frame, zoom=1., x=0., y=0.):
+    """Apply the camera framing to a whole scene frame (still, moving or a dissolve of both)."""
+    if zoom == 1 and x == 0 and y == 0:
+        return frame
+    w, h = frame.size
+    cw, ch = w / zoom, h / zoom
+    left, top = (w - cw) / 2 * (1 + PAN * x), (h - ch) / 2 * (1 + PAN * y)
+    return frame.resize((w, h), Image.Resampling.BICUBIC, box=(left, top, left + cw, top + ch))
 
 
 def frame_difference(a, b, size=JOIN_SIZE):
@@ -219,6 +250,9 @@ def compose_film(*, root, narration_wav, report, timing, scenes, output, ramp=RA
     readers, joins = {}, []
 
     def scene_frame(index, local):
+        return camera(scene_picture(index, local), *drift_at(items[index]['plan'], local, index))
+
+    def scene_picture(index, local):
         item = items[index]
         part, clip_time, alpha = state_at(item['plan'], local)
         if part is None:
@@ -286,7 +320,7 @@ def compose_film(*, root, narration_wav, report, timing, scenes, output, ramp=RA
     data = output.read_bytes()
     return {'schema_version': 1, 'composition': 'lean-5-2-3-v2-eased', 'width': w, 'height': h, 'fps': fps,
             'duration_seconds': duration, 'sha256': hashlib.sha256(data).hexdigest(), 'bytes': len(data),
-            'crossfade_seconds': overlap, 'ramp_seconds': ramp, 'still_motion': 'none', 'caption_count': len(captions),
+            'crossfade_seconds': overlap, 'ramp_seconds': ramp, 'still_motion': 'eased camera breath (max 5%)', 'caption_count': len(captions),
             'scenes': [{'image_id': i['image_id'], 'start_seconds': i['start'], 'end_seconds': i['end'], 'rule': i['plan']['rule'],
                         'clip_seconds': i['plan']['clip_seconds'], 'parts': [asdict(s) for s in i['plan']['segments']]} for i in items],
             'joins': joins, 'join_threshold': join_threshold, 'flagged_joins': sum(j['flagged'] for j in joins),

@@ -11,7 +11,8 @@ from pathlib import Path
 
 from PIL import Image
 
-from byron_video.lean_composition import (RAMP, frame_difference, scene_plan, state_at, still_frame, still_windows)
+from byron_video.lean_composition import (RAMP, camera, drift_at, frame_difference, scene_plan, state_at, still_frame,
+                                          still_windows)
 
 
 def parts(plan):
@@ -33,23 +34,23 @@ class SceneRuleChecks(unittest.TestCase):
     def test_full_rule_places_5_2_3_at_start_middle_and_end(self):
         plan = scene_plan(20, 10)
         self.assertEqual(plan['rule'], 'full')
-        self.assertEqual(parts(plan), [(0, 0, 5), (8.25, 5, 7), (16.25, 7, 10)])
+        self.assertEqual(parts(plan), [(0, 0, 5), (10 - (2 + RAMP) / 2, 5, 7), (20 - (3 + RAMP / 2), 7, 10)])
         first, middle, last = plan['segments']
         self.assertEqual((first.ramp_in, first.ramp_out), (0, RAMP))  # Direct start: clip t=0 is the original.
         self.assertEqual((middle.ramp_in, middle.ramp_out), (RAMP, RAMP))
         self.assertEqual((last.ramp_in, last.ramp_out), (RAMP, 0))  # Clip t=L is the original; scene crossfade follows.
         self.assertAlmostEqual(last.end, 20); self.assertAlmostEqual(middle.at + middle.length / 2, 10)
         self.assert_forward_once(plan)
-        self.assertEqual(scene_plan(15, 10)['rule'], 'full')
+        self.assertEqual(scene_plan(16, 10)['rule'], 'full')
 
     def test_short_scene_rules(self):
         plan = scene_plan(12, 10)
-        self.assertEqual(plan['rule'], 'two_part'); self.assertEqual(parts(plan), [(0, 0, 5), (8.25, 7, 10)])
-        self.assertEqual(scene_plan(14.99, 10)['rule'], 'two_part'); self.assertEqual(scene_plan(10.5, 10)['rule'], 'two_part')
+        self.assertEqual(plan['rule'], 'two_part'); self.assertEqual(parts(plan), [(0, 0, 5), (12 - (3 + RAMP / 2), 7, 10)])
+        self.assertEqual(scene_plan(15.99, 10)['rule'], 'two_part'); self.assertEqual(scene_plan(10.5, 10)['rule'], 'two_part')
         plan = scene_plan(6, 10)
-        self.assertEqual(plan['rule'], 'opening_only'); self.assertEqual(plan['segments'][0].ramp_out, 1.5)
+        self.assertEqual(plan['rule'], 'opening_only'); self.assertEqual(plan['segments'][0].ramp_out, min(RAMP, 2.4))
         self.assertLessEqual(plan['segments'][0].end, 6)
-        for duration in (0.5, 3, 6, 7.99, 8, 9.3, 10.49, 10.5, 12, 14.99, 15, 30, 61):
+        for duration in (0.5, 3, 6, 7.99, 8, 9.3, 10.49, 10.5, 12, 14.99, 15, 15.99, 16, 30, 61):
             self.assert_forward_once(scene_plan(duration, 10))
             self.assert_forward_once(scene_plan(duration, 12))
 
@@ -74,6 +75,21 @@ class SceneRuleChecks(unittest.TestCase):
         self.assertEqual(state_at(plan, middle.at)[2], 0.)  # Middle part wakes up from the still.
         self.assertAlmostEqual(state_at(plan, 19.999)[1], 10, places=2)
         self.assertEqual(len(still_windows(plan)), 2)
+
+    def test_camera_breath_takes_over_as_motion_settles_and_hands_back_at_rest(self):
+        plan = scene_plan(30, 10)
+        for start, stop in still_windows(plan):
+            for value, expected in zip(drift_at(plan, start, 0), (1., 0., 0.)):  # Begins exactly as the motion settles.
+                self.assertAlmostEqual(value, expected)
+            zoom, x, y = drift_at(plan, stop, 0)
+            self.assertAlmostEqual(zoom, 1); self.assertAlmostEqual(x, 0); self.assertAlmostEqual(y, 0)  # Back at the exact framing.
+            zoom, x, y = drift_at(plan, (start + stop) / 2, 0)
+            self.assertTrue(1 < zoom <= 1.05 and x != 0 and y != 0)
+            self.assertLess(drift_at(plan, start + 0.01, 0)[0] - 1, 1e-5)  # Eased from rest: no jolt.
+        self.assertEqual(drift_at(plan, 1.0, 0), (1., 0., 0.))  # Camera holds still while the painting moves.
+        base = Image.linear_gradient('L').convert('RGB').resize((270, 480))
+        self.assertIs(camera(base), base); self.assertEqual(camera(base, 1.05, 1, -1).size, base.size)
+        self.assertGreater(frame_difference(camera(base, 1.05, 1, -1), base), 0)
 
     def test_join_difference_metric_and_still_is_the_original(self):
         with tempfile.TemporaryDirectory() as temp:
