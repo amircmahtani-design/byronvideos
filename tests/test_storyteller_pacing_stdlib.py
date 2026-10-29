@@ -2,7 +2,7 @@
 import unittest
 
 from byron_video.elevenlabs_adapter import plan_requests, sentence_spans, validate_profile
-from byron_video.elevenlabs_release import PARAGRAPH_PAUSE, SENTENCE_PAUSE, pause_after
+from byron_video.elevenlabs_release import PARAGRAPH_PAUSE, SENTENCE_PAUSE, SKIP_SECONDS_PER_CHAR, pause_after
 from byron_video.narration_media import RATE
 from test_provider_execution_stdlib import profile
 
@@ -33,6 +33,7 @@ class PacingChecks(unittest.TestCase):
         self.assertEqual(pause_after('“I’ve been told.”\n\n', False, 'sentences'), round(RATE * PARAGRAPH_PAUSE))
         self.assertEqual(pause_after('Then he left!', True, 'sentences'), 0)
         self.assertEqual(pause_after('A sentence. ', False, None), 0)
+        self.assertLess(SKIP_SECONDS_PER_CHAR, 0.07)  # Well below calm narration, so normal sentences are never flagged.
 
 
 if __name__ == '__main__': unittest.main()

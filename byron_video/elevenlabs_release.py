@@ -19,6 +19,7 @@ END_TOLERANCE = 0.05  # Seconds a final word may overrun the decoded audio befor
 # Storyteller pacing (profile 'pacing': 'sentences'): silence added after each spoken sentence/line.
 SENTENCE_PAUSE = 0.45
 PARAGRAPH_PAUSE = 1.1
+SKIP_SECONDS_PER_CHAR = 0.035  # Calm narration runs about 0.07 s per character; half that is suspicious.
 
 
 def pause_after(chunk, last, pacing):
@@ -102,9 +103,12 @@ def build_narration_candidate(*, owner_id, job_id, text, profile, approval, jour
                 previous, last_char = b, cb
             require(response['words'] and not chunk[last_char:].strip(), 'Word timings omit source wording.')
             pause = pause_after(chunk, index == len(requests), profile.get('pacing'))
+            # A recording far shorter than its text suggests the voice skipped words (seen live in one long request).
+            spoken = len(re.sub(r'\s+', '', chunk))
             parts.append({'request_sha256': request['sha256'], 'request_id': response['request_id'],
                           'source_audio_sha256': response['audio_sha256'], 'decoded_frames': count,
-                          'offset_frames':total_frames, 'char_start':cursor, 'char_end':cursor+len(chunk), 'pause_frames': pause})
+                          'offset_frames':total_frames, 'char_start':cursor, 'char_end':cursor+len(chunk), 'pause_frames': pause,
+                          'possible_skip': spoken >= 12 and count / RATE < SKIP_SECONDS_PER_CHAR * spoken})
             total_frames += count + pause; cursor += len(chunk); text += chunk
             require(total_frames <= RATE*MAX_SECONDS, 'Complete narration exceeds the 900-second technical ceiling; no truncation.')
         joined = temp/'joined.wav'
