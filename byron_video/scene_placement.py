@@ -55,8 +55,9 @@ def placement_request(project, text, paintings):
         'type': 'ARRAY', 'minItems': str(count - 1), 'maxItems': str(count - 1),
         'items': {'type': 'INTEGER', 'minimum': 2, 'maximum': max(2, len(numbered))}}}}
     body = {'systemInstruction': {'parts': [{'text': INSTRUCTION}]}, 'contents': [{'role': 'user', 'parts': parts}],
-            'generationConfig': {'candidateCount': 1, 'maxOutputTokens': 256, 'responseMimeType': 'application/json',
-                                 'responseSchema': schema, 'temperature': 0.2}}
+            'generationConfig': {'candidateCount': 1, 'maxOutputTokens': 1024, 'responseMimeType': 'application/json',
+                                 'responseSchema': schema, 'temperature': 0.2,
+                                 'thinkingConfig': {'thinkingLevel': 'MINIMAL', 'includeThoughts': False}}}
     return {'url': endpoint(project), 'body': body, 'sentences': numbered, 'model': MODEL}
 
 
