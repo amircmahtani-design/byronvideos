@@ -98,6 +98,9 @@ def raised_at(error):
 class LeanTimeout(RuntimeError):
     pass
 
+class LeanStopped(RuntimeError):
+    """The owner pressed Stop; the film is already marked stopped, so the worker just exits."""
+
 
 def narrate(*, owner_id, job_id, text, profile, approval, journal, transport, response_store, job_root, expected_ffmpeg_version):
     """Exact full text, each planned chunk at most once; then decode, join, normalize."""
@@ -212,12 +215,16 @@ class LeanPipeline:
         require(isinstance(job_id, str) and bool(JOB_ID.fullmatch(job_id)), 'Invalid film reference.')
         self.check()
         job = self.jobs.begin(self.owner, job_id)
-        if job.status == 'complete':
+        if job.status == 'complete' or job.stopped_by_owner:
             return job
         ledger = None; self.stage = 'preparing'
         try:
             ledger = self.ledger_factory(job.id)
             return self._run(job, ledger)
+        except LeanStopped:
+            print(json.dumps({'job_id': job.id, 'stopped_by_owner': True, 'stage': self.stage}), file=sys.stderr)
+            self._cost(job, ledger)
+            return self.jobs.get(self.owner, job.id)
         except LeanBudgetExceeded as error:
             message = str(error)
         except Exception as error:
@@ -236,7 +243,13 @@ class LeanPipeline:
 
     def _progress(self, job, value, message):
         self.check()
+        self.halt_if_stopped(job)
         self.jobs.progress(self.owner, job.id, value, message)
+
+    def halt_if_stopped(self, job):
+        """Checkpoint for the owner's Stop: before each paid request and at every progress update."""
+        if self.jobs.get(self.owner, job.id).stopped_by_owner:
+            raise LeanStopped()
 
     def _run(self, job, ledger):
         inputs = job.inputs
@@ -275,7 +288,9 @@ class LeanPipeline:
                 placement = {'method': 'paragraphs', 'fallback': detail}
             print(json.dumps({'job_id': job.id, 'placement': placement}), file=sys.stderr)
         output = root / 'film' / 'film.mp4'
+        self.halt_if_stopped(job)
         manifest = self.compose(root=root, narration_wav=audio, report=report, timing=timing, scenes=scenes, output=output,
+                                cancel=lambda: self.halt_if_stopped(job),
                                 join_threshold=inputs['settings']['join_difference_threshold'], title=story_title(inputs['script']),
                                 title_seconds=inputs.get('title_seconds', 2))  # Films saved before the choice existed: 2 s.
         self.stage = 'saving'
@@ -352,6 +367,7 @@ class LeanPipeline:
             require(inputs['allocations'].get(motion_operation(self.owner, job.id, image['id'])) == motion_cents(settings),
                     'Animation quote differs from the funded film.')
             self.check()
+            self.halt_if_stopped(job)  # Stop pressed: send no further paid animations.
             pending[image['position']] = (image, submit_motion_once(owner_id=self.owner, job_id=job.id, request=request,
                 approval=motion_approval(job.id, request, settings, budget), journal=journal, transport=self.motion))
         total = len(inputs['images']); deadline = self.clock() + self.deadline; failures = {}

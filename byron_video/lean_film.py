@@ -33,6 +33,8 @@ FIELDS = {'owner_id', 'job_id', 'key_sha256', 'request_sha256', 'inputs_json', '
           'message', 'steps_json', 'cost_json', 'result_json', 'start_state', 'operation', 'created_at', 'updated_at'}
 QUEUED = 'Your film is waiting to start.'
 READY = 'Your film is ready to watch and download.'
+STOPPED_BY_OWNER = ('You stopped this film. Anything already recorded or animated before you pressed Stop was paid for; '
+                    'nothing more was started. You can make another film now.')
 START_UNCERTAIN = ('We could not confirm that your film has started. Please check again in a few minutes. '
                    'It will not be started or charged twice.')
 
@@ -184,6 +186,7 @@ class LeanJob:
     start_state = property(lambda self: self.doc['start_state'])
     request_sha256 = property(lambda self: self.doc['request_sha256'])
     key_sha256 = property(lambda self: self.doc['key_sha256'])
+    stopped_by_owner = property(lambda self: self.status == 'failed' and self.message == STOPPED_BY_OWNER)
 
     def stalled(self, now):
         return self.status in ('queued', 'running') and now - self.doc['updated_at'] > STALE_SECONDS
@@ -309,8 +312,15 @@ class LeanJobStore(_FirestoreBoundary):
                             if job.status == 'queued' else {})} if job.start_state == 'requested' else None)
 
     def begin(self, owner_id, job_id):
-        return self._mutate(owner_id, job_id, lambda job: None if job.status == 'complete' else
+        # A film the owner stopped stays stopped, even if its worker only starts afterwards.
+        return self._mutate(owner_id, job_id, lambda job: None if job.status == 'complete' or job.stopped_by_owner else
                             {'status': 'running', 'progress': max(job.progress, 5), 'message': 'Your film is being made…'})
+
+    def stop(self, owner_id, job_id):
+        """Owner's Stop: the film ends now and no longer holds the one-film-at-a-time lock.
+        The worker sees it at its next checkpoint and starts nothing new; finished films are unchanged."""
+        return self._mutate(owner_id, job_id, lambda job: {'status': 'failed', 'message': STOPPED_BY_OWNER}
+                            if job.status in ('queued', 'running') else None)
 
     def progress(self, owner_id, job_id, value, message):
         require(type(value) is int and 0 <= value < 100 and isinstance(message, str) and len(message) <= 300, 'Invalid progress.')
@@ -343,7 +353,7 @@ class LeanJobStore(_FirestoreBoundary):
 
     def fail(self, owner_id, job_id, message):
         require(isinstance(message, str) and 0 < len(message) <= 500, 'Plain failure message required.')
-        return self._mutate(owner_id, job_id, lambda job: None if job.status == 'complete' else
+        return self._mutate(owner_id, job_id, lambda job: None if job.status == 'complete' or job.stopped_by_owner else
                             {'status': 'failed', 'message': message})
 
 

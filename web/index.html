@@ -69,6 +69,17 @@
           <button id="convert" type="submit" class="primary" disabled>Convert to film <span aria-hidden="true">→</span></button>
         </section>
       </fieldset>
+      <section id="check" class="card check" aria-labelledby="check-heading" hidden>
+        <p class="eyebrow">Before anything is paid for</p>
+        <h2 id="check-heading" tabindex="-1">Check this is the right story</h2>
+        <dl class="check-list">
+          <dt>Title card</dt><dd id="check-title"></dd>
+          <dt>Starts</dt><dd id="check-start"></dd>
+          <dt>Ends</dt><dd id="check-end"></dd>
+          <dt>Film</dt><dd id="check-meta"></dd>
+        </dl>
+        <div class="job-actions"><button id="check-go" type="button" class="primary">Looks right — make the film <span aria-hidden="true">→</span></button><button id="check-edit" type="button" class="quiet">Edit</button></div>
+      </section>
       <p id="error" class="error" role="alert" hidden></p>
     </form>
     <section id="job" class="job card" aria-labelledby="job-title" hidden>
@@ -77,7 +88,7 @@
       <progress id="progress" max="100" aria-label="Rendering progress"></progress>
       <p id="job-note" class="muted">Keep this page open. Larger scripts take longer; the progress shown comes from the renderer.</p>
       <div class="job-actions"><button id="retry-upload" class="primary" type="button" hidden>Try again</button><button id="resume" class="quiet" type="button" hidden>Check film status</button>
-        <button id="resume-film" type="button" class="quiet" hidden>Resume this film</button><a id="download" class="primary" download="byron-film.mp4" hidden>Download MP4 <span aria-hidden="true">↓</span></a><button id="new-film" type="button" class="quiet" hidden>Make another film</button></div>
+        <button id="resume-film" type="button" class="quiet" hidden>Resume this film</button><a id="download" class="primary" download="byron-film.mp4" hidden>Download MP4 <span aria-hidden="true">↓</span></a><button id="new-film" type="button" class="quiet" hidden>Make another film</button><button id="stop-film" type="button" class="quiet" hidden>Stop this film</button></div>
       <div id="exact-actions" hidden><p id="exact-note" class="muted"></p><div class="job-actions">
         <button id="approve-film" type="button" class="quiet" hidden>Approve THIS film &amp; get clean copy</button>
         <button id="renew-preview" type="button" class="quiet" hidden>Renew private preview access</button>

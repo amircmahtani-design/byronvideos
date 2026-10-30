@@ -5,7 +5,7 @@ import unittest
 from byron_video.deployment_plan import validate_config
 from byron_video.elevenlabs_adapter import plan_requests
 from byron_video.hosted_control import IdempotencyConflict
-from byron_video.lean_film import (STALE_SECONDS, STOPPED, LeanBudget, LeanBudgetExceeded, LeanBusy, LeanJobStore, LeanLedger, LeanStarter, allocations,
+from byron_video.lean_film import (STALE_SECONDS, STOPPED, STOPPED_BY_OWNER,LeanBudget, LeanBudgetExceeded, LeanBusy, LeanJobStore, LeanLedger, LeanStarter, allocations,
     estimate_cents, freeze_inputs, lean_settings, motion_approval, motion_cents, motion_operation, narration_profile, owner_for)
 from byron_video.provider_execution import (FAL_IMAGE_ENDPOINT, FAL_QUEUE_ORIGIN, ProviderOutcomeUnknown,
     _narration_operations, plan_anchored_motion, submit_motion_once)
@@ -194,6 +194,16 @@ class LeanFilmChecks(unittest.TestCase):
         self.assertEqual((second.public(now=now[0])['status'], second.public(now=now[0])['message']), ('failed', STOPPED))
         third, created = store.reserve(OWNER, 'lean_request_000000003', 'd' * 64, inputs_builder(self.config))
         self.assertTrue(created and third.id != second.id)
+
+    def test_owner_stop_frees_the_studio_and_a_late_worker_cannot_revive_it(self):
+        store = LeanJobStore(self.client, project_id=PROJECT, namespace=NS, transaction_runner=self.client.run)
+        first, _ = store.reserve(OWNER, KEY, 'b' * 64, inputs_builder(self.config))
+        stopped = store.stop(OWNER, first.id)
+        self.assertEqual((stopped.status, stopped.message, stopped.stopped_by_owner), ('failed', STOPPED_BY_OWNER, True))
+        self.assertTrue(store.reserve(OWNER, 'lean_request_000000002', 'c' * 64, inputs_builder(self.config))[1])  # Lock released at once.
+        self.assertTrue(store.begin(OWNER, first.id).stopped_by_owner)  # A worker starting afterwards does not restart it.
+        self.assertEqual(store.fail(OWNER, first.id, 'Stopped at the narration (ElevenLabs): synthetic.').message, STOPPED_BY_OWNER)
+        self.assertTrue(store.stop(OWNER, first.id).stopped_by_owner)  # Pressing Stop twice is harmless.
 
     def test_cloud_run_start_request_shape_and_uncertain_outcome(self):
         calls = []

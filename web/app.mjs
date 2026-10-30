@@ -1,11 +1,12 @@
 import {exactCheckpoint,persistExact,exactFilmAction,exactActionResolved} from './exact-film.mjs';
-import {MAX_SCRIPT_CHARACTERS, countWords, validateScript, validateImages, moveItem, safeJobId, safeDownloadURL, displayProgress, isPrivateDraft, completedFilmNote, refreshVoiceState, voiceLabel, skipNote} from './core.mjs';
+import {MAX_SCRIPT_CHARACTERS, countWords, validateScript, validateImages, moveItem, safeJobId, safeDownloadURL, displayProgress, isPrivateDraft, completedFilmNote, refreshVoiceState, voiceLabel, skipNote, storyPreview} from './core.mjs';
 
 import {hostedCapability, freezeSubmission, submitHosted, persistPending, persistHostedJob, recoverSubmission, resumeCheckpoint, persistResume, resumeResolved, resumeHosted} from './hosted.mjs';
 
 const $ = id => document.getElementById(id);
-const ui = Object.fromEntries(['exact-actions','exact-note','approve-film','renew-preview','renew-clean','clean-download','check-exact','voice','refresh-voices','voice-status','creator','inputs','script','script-count','images','paintings','empty-images','convert','connection','reconnect','error','job','job-title','job-message','job-note','progress','download','new-film','resume','resume-film','prototype-title','prototype-copy','studio-status','retry-upload','script-skips','title-seconds'].map(id => [id, $(id)]));
+const ui = Object.fromEntries(['exact-actions','exact-note','approve-film','renew-preview','renew-clean','clean-download','check-exact','voice','refresh-voices','voice-status','creator','inputs','script','script-count','images','paintings','empty-images','convert','connection','reconnect','error','job','job-title','job-message','job-note','progress','download','new-film','resume','resume-film','prototype-title','prototype-copy','studio-status','retry-upload','script-skips','title-seconds','stop-film','check','check-heading','check-title','check-start','check-end','check-meta','check-go','check-edit'].map(id => [id, $(id)]));
 let paintings = [];
+let checked = false; // The owner confirmed the "check this is the right story" panel for exactly these inputs.
 let ready = false;
 let activeJob = null;
 let busy = false;
@@ -73,6 +74,7 @@ function updateCount() {
   ui['script-skips'].textContent = skipNote(ui.script.value);
 }
 function showPaintings() {
+  hideCheck(); // Order or count changed: confirm again.
   ui.paintings.replaceChildren();
   ui['empty-images'].hidden = paintings.length > 0;
   paintings.forEach((item, index) => {
@@ -196,13 +198,17 @@ function failedJob(message) {
     (ui.script.value || paintings.length ? 'Your story and paintings are still here.' : 'You will need to paste your story and choose your paintings again.');
   ui['new-film'].textContent = 'I’ve fixed it — try again'; ui['new-film'].hidden = false;
   ui.convert.textContent = 'Locked — see below';
+  if (message.startsWith('You stopped this film')) {
+    ui['job-title'].textContent = 'Film stopped'; ui['new-film'].textContent = 'Make another film';
+    ui['job-note'].textContent = 'Your story and paintings are still here. Correct them, then press Make another film.';
+  }
 }
 async function pollJob() {
   if (!activeJob) return;
   const id = activeJob;
   eligibleResumeAttempt=null; ui['resume-film'].hidden=true;
   pollController = new AbortController();
-  ui.resume.hidden = true;
+  ui.resume.hidden = true; ui['stop-film'].hidden = true;
   try {
     const response = await timedFetch(`/api/jobs/${id}`, {cache: 'no-store', signal: pollController.signal});
     if (hostedJob && [401, 403].includes(response.status)) { askToSignIn(id); return; }
@@ -239,6 +245,7 @@ async function pollJob() {
     } else if (['failed','error','cancelled'].includes(job.status)) failedJob(typeof job.message === 'string' ? job.message : 'The renderer reported an error.');
     else if (['queued','running','rendering','processing'].includes(job.status)) {
       ui['job-title'].textContent = job.status === 'queued' ? 'Your film is in the queue' : 'Making your film';
+      ui['stop-film'].hidden = !hostedJob;
       timer = setTimeout(pollJob, 2000);
     } else throw new Error('The renderer returned an unfamiliar status. Check film status again; no new job will be started.');
   } catch (error) {
@@ -247,6 +254,30 @@ async function pollJob() {
     ui['job-note'].textContent = 'Do not submit again. Use Check film status to reconnect to this same job.'; ui.resume.hidden = false;
   }
 }
+function showCheck() {
+  const {title, start, end, words} = storyPreview(ui.script.value);
+  const seconds = Number(ui['title-seconds'].value);
+  ui['check-title'].textContent = !seconds ? 'No title card' : title ? `“${title}” with Lord Byron, ${seconds} second${seconds === 1 ? '' : 's'}` : 'No title line found, so no title card';
+  ui['check-start'].textContent = start; ui['check-end'].textContent = end;
+  ui['check-meta'].textContent = `${words} words read aloud · ${paintings.length} paintings · ${ui.voice.selectedOptions[0]?.textContent || 'narrator'}`;
+  ui.check.hidden = false; ui['check-heading'].focus(); ui.check.scrollIntoView({block:'nearest'});
+}
+function hideCheck() { checked = false; ui.check.hidden = true; }
+ui['check-go'].addEventListener('click', () => { checked = true; ui.creator.requestSubmit(); });
+ui['check-edit'].addEventListener('click', () => { hideCheck(); ui.script.focus(); });
+ui.inputs.addEventListener('input', hideCheck); ui.inputs.addEventListener('change', hideCheck);
+ui['stop-film'].addEventListener('click', async () => {
+  const id = activeJob;
+  if (!id || !hosted || !confirm('Stop this film now? Anything already recorded or animated has been paid for; nothing more will be started.')) return;
+  ui['stop-film'].disabled = true;
+  try {
+    const response = await timedFetch(`/api/jobs/${id}/stop`, {method:'POST', credentials:'same-origin', headers:{'X-CSRF-Token':hosted.csrf}}, 30000);
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : 'The film could not be stopped just now. Try again in a moment.');
+    stopPolling(); await pollJob();
+  } catch (error) { showError(error.message); }
+  finally { ui['stop-film'].disabled = false; }
+});
 ui.script.addEventListener('input', () => { updateCount(); showError(); });
 ui.images.addEventListener('change', () => {
   if (busy) return;
@@ -356,6 +387,8 @@ ui.creator.addEventListener('submit', async event => {
   event.preventDefault(); if (!ready || busy) return;
   const error = validateScript(ui.script.value) || validateImages(paintings.map(item => item.file));
   if (error) { showError(error); ui.error.scrollIntoView({block:'nearest'}); return; }
+  if (hosted && !checked) { showCheck(); return; } // Nothing is uploaded or paid for until the owner confirms.
+  checked = false; ui.check.hidden = true;
   if (hosted) {
     let snapshot;
     try { snapshot = freezeSubmission(ui.script.value, paintings.map(item => item.file), voiceState, crypto.randomUUID(), Number(ui['title-seconds'].value)); }

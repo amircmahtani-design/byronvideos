@@ -378,7 +378,7 @@ def title_level(t, length):
     return min(ease(t / fade), ease((length - rest - t) / fade))
 
 def compose_film(*, root, narration_wav, report, timing, scenes, output, ramp=RAMP, turn=TURN, join_threshold=18.0, style=None,
-                 title=None, byline=TITLE_BYLINE, title_seconds=TITLE_SECONDS):
+                 title=None, byline=TITLE_BYLINE, title_seconds=TITLE_SECONDS, cancel=None):
     """scenes: [{'image_id','original_path','clip_path'}] in the frozen numbered order.
     title: shown silently for title_seconds on an opening card with the byline (0 or no title: no card);
     the narration and every scene start after it."""
@@ -456,6 +456,8 @@ def compose_film(*, root, narration_wav, report, timing, scenes, output, ramp=RA
             process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=errors)
             try:
                 for number in range(total):
+                    if cancel is not None and number % (fps * 2) == 0:
+                        cancel()  # Owner's Stop: raises, and the encoder and partial output are discarded below.
                     t = number / fps - intro
                     if t < 0:  # Opening card: silent, no captions; ends on charcoal before the first painting fades in.
                         level = title_level(number / fps, intro)

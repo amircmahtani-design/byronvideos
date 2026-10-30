@@ -75,6 +75,13 @@ test('hosted submission freezes voice and original ordered files without rewriti
   assert.ok(Object.isFrozen(snapshot) && Object.isFrozen(snapshot.files));
   assert.throws(()=>hostedAPI.freezeSubmission('Words.',sourceFiles(),{...voices(),removed:true},'fixture_request_0001'));
 });
+test('check panel shows the title card line and the narration\'s first and last words', () => {
+  const p = storyPreview('# The Prisoner of Chillon\nby Lord Byron\n\nMy hair is grey, but not with years.\n\nRead more: https://badmaddangerous.com\n\nAnd so the last line ends here.', 4);
+  assert.equal(p.title, 'The Prisoner of Chillon');  // Not the byline; neither is read aloud.
+  assert.equal(p.start, 'My hair is grey, …'); assert.equal(p.end, '… last line ends here.');
+  assert.equal(p.words, 15);  // The link-only line is not read either.
+  assert.deepEqual(storyPreview('Short story here.', 4), {title:'', start:'Short story here.', end:'Short story here.', words:3});
+});
 test('opening title length defaults to 2 seconds and only accepts the offered choices', () => {
   assert.equal(hostedAPI.freezeSubmission('Words.',sourceFiles(),voices(),'fixture_request_0001').titleSeconds,2);
   assert.equal(hostedAPI.freezeSubmission('Words.',sourceFiles(),voices(),'fixture_request_0001',0).titleSeconds,0);
@@ -207,7 +214,7 @@ test('fixture-only capability cannot resume and malformed receipt cannot confirm
 });
 
 import {isPrivateDraft} from './core.mjs';
-import {skipNote,storySkips} from './core.mjs';
+import {skipNote,storySkips,storyPreview} from './core.mjs';
 
 test('heading lines and link-only lines are listed as not read aloud, matching spoken_text.py', () => {
   const live='The Woman Who Waited\n\nby Lord Byron\n\nbadmaddangerous.com\n\nAt thirty-six, Leila Mehra was considered the most beautiful woman in Bombay.';

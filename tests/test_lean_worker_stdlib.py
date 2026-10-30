@@ -167,6 +167,18 @@ class LeanWorkerChecks(unittest.TestCase):
         self.assertEqual(done.status, 'complete', done.message)
         self.assertEqual(eleven.calls, 120); self.assertEqual(len(fal.submitted), 4); self.assertEqual(heard, [story])
 
+    def test_stop_mid_animation_sends_no_further_paid_requests(self):
+        eleven, fal = ElevenLabs(), Fal(); self.compose_fails = False
+        submit = fal.submit
+        def submit_then_stop(request):  # Owner presses Stop right after the first painting is sent.
+            handle_ = submit(request); self.store.stop(OWNER, self.job.id); return handle_
+        fal.submit = submit_then_stop
+        job = self.pipeline(eleven, fal).run(self.job.id)
+        self.assertTrue(job.stopped_by_owner, job.message)
+        self.assertEqual(len(fal.submitted), 1); self.assertNotIn('compose', self.calls)
+        self.assertEqual(self.pipeline(eleven, fal).run(self.job.id).status, 'failed')  # A rerun does not restart it.
+        self.assertEqual((eleven.calls, len(fal.submitted)), (1, 1))
+
     def test_skipped_narration_stops_before_any_painting_is_animated(self):
         eleven, fal = ElevenLabs(), Fal()
         pipeline = self.pipeline(eleven, fal)

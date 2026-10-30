@@ -118,6 +118,17 @@ class LeanRouteChecks(unittest.TestCase):
         self.assertEqual(self.store.get(OWNER, job_id).inputs['title_seconds'], 3)
         self.assertEqual(self.http.post('/api/jobs', json={**body(), 'title_seconds': 4}, headers=GOOD).status_code, 409)  # Same key, other choice.
 
+    def test_stop_is_owner_csrf_bound_and_frees_the_studio(self):
+        job_id = self.http.post('/api/jobs', json=body(), headers=GOOD).json()['id']
+        self.assertEqual(self.http.post(f'/api/jobs/{job_id}/stop', headers={**GOOD, 'x-csrf-token': 'x' * 43}).status_code, 403)
+        self.assertEqual(self.store.get(OWNER, job_id).status, 'queued')
+        stopped = self.http.post(f'/api/jobs/{job_id}/stop', headers=GOOD)
+        self.assertEqual(stopped.status_code, 200); self.assertEqual(stopped.json()['status'], 'failed')
+        self.assertIn('You stopped this film', stopped.json()['message'])
+        again = self.http.post('/api/jobs', json=body(TEXT + ' The right story.'), headers={**GOOD, 'idempotency-key': 'lean_request_000000099'})
+        self.assertEqual(again.status_code, 202)  # The next film can start straight away.
+        self.assertEqual(self.http.post('/api/jobs/' + 'f' * 32 + '/stop', headers=GOOD).status_code, 404)
+
     def test_opening_title_defaults_to_two_seconds(self):
         job_id = self.http.post('/api/jobs', json=body(), headers=GOOD).json()['id']
         self.assertEqual(self.store.get(OWNER, job_id).inputs['title_seconds'], 2)

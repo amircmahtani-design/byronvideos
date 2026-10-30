@@ -64,6 +64,21 @@ export function storySkips(script) {
   }
   return {heading, links};
 }
+// What the "check before converting" panel shows: the title card line and the narration's first and last words.
+export function storyPreview(script, edge = 14) {
+  const {heading} = storySkips(script);
+  const title = heading.find(line => !/^(?:written\s+|words\s+)?by\s+\S/iu.test(line)) || '';
+  const lines = script.replace(MARKDOWN_LINK, '$1').replace(/\r\n?/gu, '\n').split('\n');
+  let removed = 0;
+  const story = lines.filter(line => {
+    if (!line.trim()) return true;
+    if (removed < heading.length && line.trim().replace(/^#+/u, '').trim() === heading[removed]) { removed++; return false; }
+    return !linkOnly(line)[1];
+  }).join(' ').replace(WEB_ADDRESS, '').split(/\s+/u).filter(Boolean);
+  const start = story.slice(0, edge).join(' ') + (story.length > edge ? ' …' : '');
+  const end = story.length > edge ? '… ' + story.slice(-edge).join(' ') : story.join(' ');
+  return {title, start, end, words: story.length};
+}
 export function skipNote(script) {
   const {heading, links} = storySkips(script);
   const short = text => `“${text.length > 50 ? text.slice(0, 47) + '…' : text}”`;

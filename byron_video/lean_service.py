@@ -2,6 +2,7 @@
 
 POST /api/uploads (multipart `images`, Idempotency-Key) → {upload_id, images:[{id, position}]}
 POST /api/jobs   JSON {script, images, voice_id, title_seconds} + Idempotency-Key → {id, status}
+POST /api/jobs/{id}/stop → the film ends now and the studio is free for the next one
 GET  /api/jobs/{id}, /api/jobs/{id}/video, /api/submissions/{key}, /api/creator-capabilities
 Mutations require the owner session, exact Origin and session CSRF token (as admin.py).
 """
@@ -211,6 +212,18 @@ def install_lean_routes(app, *, access, owner_id, config, settings, jobs, ledger
         await owner(request)
         job = await run_in_threadpool(owned, job_id)
         return job.public(now=time.time())  # A silently stopped film is reported as stopped, not waiting.
+
+    @app.post('/api/jobs/{job_id}/stop')
+    async def stop(request: Request, job_id: str):
+        await owner(request)  # Owner session, exact Origin and CSRF token, like every other change.
+        job = await run_in_threadpool(owned, job_id)
+        if job.status == 'complete':
+            raise HTTPException(409, 'This film has already finished, so there is nothing to stop.')
+        try:
+            job = await run_in_threadpool(jobs.stop, owner_id, job.id)
+        except Exception:
+            raise HTTPException(503, 'The film could not be stopped just now. Try Stop again in a moment.') from None
+        return job.public(now=time.time())
 
     @app.get('/api/submissions/{key}')
     async def recover(request: Request, key: str):
