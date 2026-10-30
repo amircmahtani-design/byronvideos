@@ -3,6 +3,7 @@ import base64
 import hashlib
 import io
 import json
+import math
 import re
 import tempfile
 import unittest
@@ -12,7 +13,7 @@ from types import SimpleNamespace
 from byron_video.elevenlabs_adapter import fingerprint
 from byron_video.hosted_control import require
 from byron_video.lean_film import LeanJobStore, LeanLedger
-from byron_video.lean_worker import LeanPipeline, explain, lean_timing, motion_anchor, story_title, with_bounds
+from byron_video.lean_worker import LeanPipeline, explain, lean_timing, motion_anchor, settle_word_times, story_title, with_bounds
 from byron_video.provider_execution import FileResponseStore, WireResponse, execute_narration_once
 from test_cloud_journal_stdlib import Client, PROJECT
 from test_hosted_uploads_stdlib import image_bytes
@@ -207,6 +208,23 @@ class LeanWorkerChecks(unittest.TestCase):
         broken = [dict(w) for w in words]; broken[4]['end'] = broken[4]['start']  # "lake" with no duration
         with self.assertRaisesRegex(ValueError, 'Narration word timing is invalid: “lake” at 2.0–2.0 s'):
             lean_timing(*self.timing_job(text, broken, 8.0))
+
+    def test_last_word_overrunning_by_rounding_is_settled_but_real_overrun_is_named(self):
+        # Exact numbers from the film stopped on 30 Oct 2026: "house." ended 1e-14 s after the narration.
+        text = 'The rain fell on the old house.'
+        words = [{'text': m.group(), 'start': i * 20.0, 'end': i * 20.0 + 15.0, 'char_start': m.start(), 'char_end': m.end()}
+                 for i, m in enumerate(re.finditer(r'\S+', text))]
+        duration = 172.23154166666666
+        words[-1].update(start=171.59295833333334, end=math.nextafter(duration, math.inf))  # One float step past the end.
+        job, report = self.timing_job(text, words, duration)
+        with self.assertRaisesRegex(ValueError, '“house.”'):
+            lean_timing(job, report)  # What the film hit before.
+        settled = settle_word_times(report)
+        self.assertEqual(settled['words'][-1]['end'], duration); self.assertGreater(report['words'][-1]['end'], duration)  # Saved report untouched.
+        lean_timing(job, settled)
+        words[-1]['end'] = duration + .01  # A real overrun is not hidden.
+        with self.assertRaisesRegex(ValueError, '“house.”'):
+            lean_timing(*self.timing_job(text, settle_word_times(report)['words'], duration))
 
     def test_title_line_goes_on_the_card_not_the_byline(self):
         self.assertEqual(story_title('# The Prisoner of Chillon\nby Lord Byron\n\nMy hair is grey, but not with years.'), 'The Prisoner of Chillon')

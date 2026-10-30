@@ -140,6 +140,16 @@ def story_title(script):
     return next((line for line in headings if not BYLINE.match(line)), None)
 
 
+ROUNDING_SECONDS = 1e-6  # Word offsets and the decoded length can differ by float rounding (seen: 1e-14 s on the last word).
+
+def settle_word_times(report):
+    """Pull word times that overrun the narration by rounding only (≤ 1 µs) back onto its end.
+    The saved report is untouched; larger overruns are left for the checks to name."""
+    duration = report['duration_seconds']
+    def settle(value):
+        return duration if type(value) in (int, float) and duration < value <= duration + ROUNDING_SECONDS else value
+    return {**report, 'words': [{**w, 'start': settle(w['start']), 'end': settle(w['end'])} for w in report['words']]}
+
 def lean_timing(job, report, source_reviews=None):
     """Scene timing from the narration's word times, like generation_coordinator.narration_timing
     (paragraphs when they match the paintings, else sentence ends near equal shares) but for narrations
@@ -238,6 +248,7 @@ class LeanPipeline:
         self.stage = 'narration'
         self._progress(job, 10, 'Recording the narration…')
         report, audio = self._narration(job, journal, root)
+        report = settle_word_times(report)
         self._cost(job, ledger)
         if self.checker is not None:  # Listen back before any painting is animated (and paid for).
             heard, detail = self.checker(text=inputs['narrated_text'], audio_path=audio)
