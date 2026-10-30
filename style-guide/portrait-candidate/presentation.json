@@ -1,0 +1,53 @@
+{
+  "canvas": {
+    "aspect": "9:16",
+    "colour_space": "bt709",
+    "fps": 24,
+    "height": 1920,
+    "width": 1080
+  },
+  "captions": {
+    "font_family": "DejaVu Sans",
+    "font_file": "fonts/DejaVuSans.ttf",
+    "font_height_fraction": 0.025,
+    "font_license_file": "fonts/LICENSE-DejaVu.txt",
+    "font_sha256": "57f73e11f51999432bf7ab22ce55b6f945d5eca1bf824404cfa9ec2e3718c84e",
+    "font_style": "Book",
+    "line_height_fraction": 0.035,
+    "max_characters": 54,
+    "max_duration_seconds": 5.2,
+    "max_lines": 2,
+    "min_continuation_words": 3,
+    "one_line_top_fraction": 0.84,
+    "safe_width_fraction": 0.82,
+    "sentence_minimum_seconds": 1.1,
+    "source_text_only": true,
+    "stroke_colour": "charcoal",
+    "stroke_height_divisor": 600,
+    "tail_extension_seconds": 0.12,
+    "text_colour": "parchment",
+    "timing": "kokoro_token_duration",
+    "two_line_top_fraction": 0.82
+  },
+  "encoding": {
+    "audio_bitrate": "160k",
+    "audio_codec": "aac",
+    "crf": 20,
+    "encoder_threads": 4,
+    "faststart": true,
+    "pixel_format": "yuv420p",
+    "video_codec": "libx264",
+    "video_preset": "fast"
+  },
+  "palette": {
+    "charcoal": "#141416",
+    "crimson": "#5B0E14",
+    "gold": "#C8A96A",
+    "parchment": "#EFE6D2"
+  },
+  "transitions": {
+    "closing_fade_seconds": 0.55,
+    "crossfade_seconds": 0.7,
+    "opening_fade_seconds": 0.45
+  }
+}

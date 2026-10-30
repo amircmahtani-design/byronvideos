@@ -1,0 +1,11 @@
+# No default tag or guessed digest. Build only with an independently reviewed
+# prebuilt Python + FFmpeg runtime digest and its retained dependency/SBOM record.
+ARG WORKER_BASE_IMAGE
+FROM ${WORKER_BASE_IMAGE}
+ARG WORKER_BASE_IMAGE
+WORKDIR /app
+COPY byron_video /app/byron_video
+COPY style-guide /app/style-guide
+RUN BASE="$WORKER_BASE_IMAGE" python3 -c "import os; from byron_video.worker_binding import validate_container_base; validate_container_base(os.environ['BASE'])"
+USER 65532:65532
+ENTRYPOINT ["python3", "-m", "byron_video.worker_bootstrap"]

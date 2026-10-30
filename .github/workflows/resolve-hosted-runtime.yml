@@ -1,0 +1,173 @@
+name: Resolve public hosted runtime candidate (PR/manual, no activation)
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+    inputs:
+      python_patch:
+        description: Explicit CPython 3.12 patch for official slim-trixie image; no latest fallback
+        required: true
+        default: '3.12.14'
+        type: string
+permissions:
+  contents: read
+jobs:
+  resolve-build-test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Resolve official Python image to immutable digest
+        env:
+          PYTHON_PATCH: ${{ inputs.python_patch || '3.12.14' }}
+        run: |
+          python3 - <<'PY'
+          import json,os,pathlib,re,subprocess
+          patch=os.environ['PYTHON_PATCH']
+          assert re.fullmatch(r'3\.12\.\d+',patch),'Exact CPython 3.12 patch required'
+          tag='docker.io/library/python:'+patch+'-slim-trixie'
+          subprocess.run(['docker','pull','--platform','linux/amd64',tag],check=True)
+          info=json.loads(subprocess.check_output(['docker','image','inspect',tag]))[0]
+          assert info['Architecture']=='amd64' and info['Os']=='linux'
+          digests=[v for v in info['RepoDigests'] if re.fullmatch(r'(?:docker\.io/)?(?:library/)?python@sha256:[a-f0-9]{64}',v)]
+          assert len(digests)==1,'One exact official repository digest required'
+          root=pathlib.Path(os.environ['RUNNER_TEMP'])/'byron-runtime-output';root.mkdir()
+          (root/'base-resolution.json').write_text(json.dumps({'tag':tag,'digest':digests[0],'image_id':info['Id'],'platform':'linux/amd64','python':patch},indent=2)+'\n')
+          with open(os.environ['GITHUB_ENV'],'a') as f:
+              f.write('PYTHON_BASE_IMAGE='+digests[0]+'\nPYTHON_PATCH='+patch+'\nRUNTIME_OUTPUT='+str(root)+'\n')
+          PY
+      - name: Prepare dependency-only inputs, no private config/source archive
+        run: |
+          mkdir "$RUNNER_TEMP/byron-runtime-input"
+          cp scripts/resolve_runtime_candidate.py byron_video/runtime_packaging.py requirements-hosted.in "$RUNNER_TEMP/byron-runtime-input/"
+      - name: Resolve public PyPI wheels and signed Debian archive closure (no install)
+        run: |
+          # Only this fresh public output directory changes ownership. Container
+          # root has no DAC override capability and cannot write runner-owned 0755.
+          test "$RUNTIME_OUTPUT" = "$RUNNER_TEMP/byron-runtime-output"
+          test -d "$RUNTIME_OUTPUT" && test ! -L "$RUNTIME_OUTPUT"
+          runner_owner="$(id -u):$(id -g)"
+          trap 'sudo chown -hR -- "$runner_owner" "$RUNTIME_OUTPUT"' EXIT
+          sudo chown -- 0:0 "$RUNTIME_OUTPUT"
+          docker run --rm --platform linux/amd64 --cap-drop=ALL --security-opt=no-new-privileges \
+            -e GITHUB_ACTIONS=true -v "$RUNNER_TEMP/byron-runtime-input:/input:ro" -v "$RUNTIME_OUTPUT:/output" \
+            "$PYTHON_BASE_IMAGE" python3 /input/resolve_runtime_candidate.py --resolve-public-dependencies \
+            --base-image "$PYTHON_BASE_IMAGE" --python-version "$PYTHON_PATCH" \
+            --input /input/requirements-hosted.in --output /output/materials
+      - name: Prepare allowlisted candidate build context and review artifacts
+        run: |
+          python3 - <<'PY'
+          import json,os,pathlib,shutil
+          source=pathlib.Path.cwd();output=pathlib.Path(os.environ['RUNTIME_OUTPUT']);context=output/'materials'
+          shutil.copyfile(source/'Dockerfile.hosted-candidate',context/'Dockerfile')
+          shutil.copyfile(source/'byron_video/runtime_packaging.py',context/'runtime_packaging.py')
+          for folder,extensions in [('byron_video',{'.py'}),('style-guide',{'.json','.md','.png','.ttf','.txt','.gitkeep'}),('web',{'.html','.css','.mjs','.txt','.xml'})]:
+              for p in (source/folder).rglob('*'):
+                  if not p.is_file():continue
+                  assert not p.is_symlink(),'No symlinks in public candidate context'
+                  if p.suffix not in extensions or '__pycache__' in p.parts or p.name.endswith('.test.mjs'):continue
+                  target=context/p.relative_to(source);target.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(p,target)
+          # Docker emits locks using exclusive create. Preserve resolver copies as
+          # review artifacts, and let the offline build independently regenerate.
+          for name in ('requirements.lock','sdk-lock.json'):
+              shutil.copyfile(context/name,output/name);(context/name).unlink()
+          for name in ('materials.json','resolution-status.json','sbom.cdx.json','pypi-artifacts.json','apt-policy.txt','candidate-pins.txt'):
+              shutil.copyfile(context/name,output/name)
+          PY
+      - name: Offline dependency install and application build (no push)
+        run: |
+          docker build --network=none --pull=false --platform linux/amd64 \
+            --build-arg PYTHON_BASE_IMAGE="$PYTHON_BASE_IMAGE" -t byron-hosted-candidate "$RUNTIME_OUTPUT/materials"
+          docker image inspect byron-hosted-candidate --format '{{json .Id}}' > "$RUNTIME_OUTPUT/candidate-image-id.json"
+      - name: Full pinned tests with no network, credentials or provider access
+        run: |
+          docker run --rm --network=none --read-only --cap-drop=ALL --security-opt=no-new-privileges \
+            --tmpfs /tmp:rw,nosuid,size=3g -v "$PWD:/app:ro" -w /app -e BYRON_REQUIRE_MEDIA_TESTS=1 \
+            -e PYTHONDONTWRITEBYTECODE=1 --entrypoint /bin/sh byron-hosted-candidate -ec '
+              python3 -m byron_video.runtime_packaging installed --manifest /opt/byron-runtime/materials.json --font /app/style-guide/fonts/DejaVuSans.ttf
+              python3 -m byron_video.style --check
+              python3 -m pytest -q -p no:cacheprovider
+            '
+          node --version
+          node --test web/*.test.mjs
+          node --check web/app.mjs
+      - name: Export the tested public image for isolated operator transfer
+        if: github.event_name == 'pull_request' && github.head_ref == 'candidate/private-studio-v9-20261027' && github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          CANDIDATE_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python3 - <<'PY'
+          import gzip,hashlib,json,os,pathlib,re,subprocess
+          head=os.environ['CANDIDATE_HEAD']
+          assert re.fullmatch(r'[a-f0-9]{40}',head)
+          info=json.loads(subprocess.check_output(['docker','image','inspect','byron-hosted-candidate']))[0]
+          assert info['Os']=='linux' and info['Architecture']=='amd64'
+          assert info['Config']['User']=='65532:65532'
+          assert 0<info['Size']<=5*1024**3,'Image exceeds reviewed size ceiling'
+          root=pathlib.Path(os.environ['RUNNER_TEMP'])/'byron-image-transfer';root.mkdir()
+          archive=root/'image.tar.gz'
+          # This image was built only from the public allowlisted context above.
+          # No credentials, private bundles, host files or user media were mounted.
+          with subprocess.Popen(['docker','save','byron-hosted-candidate'],stdout=subprocess.PIPE) as proc:
+              with archive.open('xb') as raw,gzip.GzipFile(filename='',mode='wb',fileobj=raw,mtime=0) as output:
+                  while chunk:=proc.stdout.read(1024*1024):
+                      output.write(chunk)
+                      if raw.tell()>1024**3:
+                          proc.kill()
+                          raise ValueError('Transfer archive exceeds 1GiB ceiling')
+              assert proc.wait()==0,'Docker image export failed'
+          assert archive.stat().st_size<=1024**3
+          sha=hashlib.sha256()
+          with archive.open('rb') as source:
+              while chunk:=source.read(1024*1024):sha.update(chunk)
+          context=pathlib.Path(os.environ['RUNTIME_OUTPUT'])/'materials'
+          sources={}
+          for folder in ('byron_video','style-guide','web'):
+              for path in sorted((context/folder).rglob('*')):
+                  if path.is_file():
+                      assert not path.is_symlink()
+                      sources[str(path.relative_to(context))]=hashlib.sha256(path.read_bytes()).hexdigest()
+          metadata=dict(schema_version=1,head_commit=head,
+              checkout_commit=subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),
+              image_id=info['Id'],image_bytes=info['Size'],platform='linux/amd64',
+              archive_file=archive.name,archive_bytes=archive.stat().st_size,archive_sha256=sha.hexdigest(),
+              application_sources=sources,provider_calls=0,contains_private_configuration=False,
+              registry_pushed=False,deployed=False)
+          (root/'transfer.json').write_text(json.dumps(metadata,indent=2,sort_keys=True)+'\n')
+          PY
+      - name: Upload public tested image with one-day retention
+        if: github.event_name == 'pull_request' && github.head_ref == 'candidate/private-studio-v9-20261027' && github.event.pull_request.head.repo.full_name == github.repository
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: public-tested-runtime-image
+          retention-days: 1
+          compression-level: 0
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/byron-image-transfer/image.tar.gz
+            ${{ runner.temp }}/byron-image-transfer/transfer.json
+      - name: Upload only public dependency identities and review evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: public-runtime-candidate-review
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            ${{ runner.temp }}/byron-runtime-output/base-resolution.json
+            ${{ runner.temp }}/byron-runtime-output/materials.json
+            ${{ runner.temp }}/byron-runtime-output/requirements.lock
+            ${{ runner.temp }}/byron-runtime-output/sdk-lock.json
+            ${{ runner.temp }}/byron-runtime-output/resolution-status.json
+            ${{ runner.temp }}/byron-runtime-output/sbom.cdx.json
+            ${{ runner.temp }}/byron-runtime-output/pypi-artifacts.json
+            ${{ runner.temp }}/byron-runtime-output/apt-policy.txt
+            ${{ runner.temp }}/byron-runtime-output/candidate-pins.txt
+            ${{ runner.temp }}/byron-runtime-output/candidate-image-id.json
+# Credential-free PR/manual CI. The reviewed same-repository candidate branch can
+# export one bounded public image only AFTER all tests pass, with one-day retention.
+# Never uploads private configs, provider payloads/media, tokens, raw environment
+# or an unsanitized recovery ZIP. No automatic image deployment or cloud grants.
+# No cloud authentication, deployment, registry push or automatic activation.
