@@ -232,8 +232,10 @@ class LeanRenderChecks(unittest.TestCase):
                 subprocess.run(['ffmpeg', '-nostdin', '-v', 'error', '-ss', str(at), '-i', str(root / 'titled' / 'film.mp4'),
                                 '-frames:v', '1', str(frames / f'{name}.png')], check=True, timeout=60)
             with Image.open(frames / 'card.png') as card, Image.open(frames / 'story.png') as story:
-                self.assertLess(sum(card.convert('RGB').getpixel((540, 200))), 90)  # Charcoal card, not the navy painting.
-                self.assertGreater(frame_difference(card, story), 5)
+                r, g, b = card.convert('RGB').getpixel((540, 200))
+                self.assertLess(max(r, g, b), 40)  # Charcoal card (#141416), not the navy painting.
+                r, g, b = story.convert('RGB').getpixel((540, 200))
+                self.assertGreater(b, 80); self.assertLess(r, 40)  # The navy painting (0, 0, 128) once the story starts.
             loud = subprocess.run(['ffmpeg', '-nostdin', '-v', 'info', '-t', str(TITLE_SECONDS - .2), '-i', str(root / 'titled' / 'film.mp4'),
                                    '-af', 'volumedetect', '-f', 'null', '-'], capture_output=True, text=True, timeout=60).stderr
             self.assertRegex(loud, r'max_volume: -(9[0-9]|inf)')  # Nothing is read aloud over the card.
