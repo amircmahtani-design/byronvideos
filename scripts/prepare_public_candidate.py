@@ -26,7 +26,7 @@ def allowed(relative):
     if len(parts)==2 and parts[0]=='web':return p.suffix in ('.mjs','.html','.css','.txt') or p.name in ('sitemap.xml','ui.test.cjs','README.md')
     if parts[0]=='style-guide':
         if p.suffix=='.png':return p.as_posix() in BASELINE_IMAGES
-        if p.suffix=='.ttf':return p.as_posix()=='style-guide/fonts/DejaVuSans.ttf'
+        if p.suffix=='.ttf':return p.as_posix() in ('style-guide/fonts/DejaVuSans.ttf','style-guide/fonts/Italianno-Regular.ttf')
         return p.suffix in ('.json','.md','.txt') or p.name=='.gitkeep'
     return False
 

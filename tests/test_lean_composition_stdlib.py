@@ -141,6 +141,16 @@ class SceneRuleChecks(unittest.TestCase):
             self.assertEqual(frame.size, (135, 240)); self.assertLess(frame_difference(frame, base), 2)
 
 
+class FramingChecks(unittest.TestCase):
+    def test_whole_painting_is_shown_and_only_near_portrait_fills_the_frame(self):
+        from byron_video.lean_composition import art_box
+        self.assertEqual(art_box(1280, 720, 1080, 1920), (1080, 608, 0, 656, 'whole'))  # Landscape: full width, centred.
+        self.assertEqual(art_box(720, 720, 1080, 1920), (1080, 1080, 0, 420, 'whole'))   # Square: centred, clear of the captions.
+        self.assertEqual(art_box(768, 1344, 1080, 1920)[4], 'fill')                      # Already ~9:16: hides under 6%.
+        w, h, left, top, framing = art_box(1000, 1500, 1080, 1920)                        # 2:3 portrait would lose 16%.
+        self.assertEqual(framing, 'whole'); self.assertEqual(h, 1620); self.assertLessEqual(top + h, 1920)
+
+
 class TitleCardChecks(unittest.TestCase):
     def test_card_shows_title_and_byline_and_fits_long_titles(self):
         from byron_video.portrait_composition import presentation
@@ -151,7 +161,7 @@ class TitleCardChecks(unittest.TestCase):
                 card = title_card(1080, 1920, title, 'Lord Byron', style)
                 self.assertEqual(card.size, (1080, 1920)); self.assertGreater(frame_difference(card, plain), 0.2)
                 self.assertEqual(card.getpixel((0, 0)), (0x14, 0x14, 0x16))  # Charcoal edges; text stays inside the safe width.
-                self.assertEqual(card.crop((0, 0, 90, 1920)).getextrema(), ((0x14, 0x14), (0x14, 0x14), (0x16, 0x16)))
+                self.assertEqual(card.crop((0, 0, 60, 1920)).getextrema(), ((0x14, 0x14), (0x14, 0x14), (0x16, 0x16)))
 
     def test_card_fades_in_holds_and_rests_on_charcoal_before_the_story(self):
         self.assertEqual(TITLE_SECONDS, 2.0)  # Default length.
@@ -174,11 +184,12 @@ class LeanRenderChecks(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp).resolve()
             scenes, text = [], 'A quiet harbour at dawn. The boats rest. Then the hills turn gold at dusk, and the day ends.'
-            for index, colour in enumerate(('navy', 'darkgreen'), 1):
+            # A near-portrait painting fills the frame; a landscape one is shown whole on charcoal.
+            for index, (colour, painting, clip_size_) in enumerate((('navy', (900, 1200), '768x1344'), ('darkgreen', (1600, 900), '1344x768')), 1):
                 original = root / f'painting-{index}.png'
-                Image.new('RGB', (900, 1200), colour).save(original)
+                Image.new('RGB', painting, colour).save(original)
                 clip = root / f'clip-{index}.mp4'
-                subprocess.run(['ffmpeg', '-nostdin', '-v', 'error', '-f', 'lavfi', '-i', f'color=c={colour}:s=768x1344:r=24:d=10',
+                subprocess.run(['ffmpeg', '-nostdin', '-v', 'error', '-f', 'lavfi', '-i', f'color=c={colour}:s={clip_size_}:r=24:d=10',
                                 '-c:v', 'libx264', '-pix_fmt', 'yuv420p', str(clip)], check=True, timeout=120)
                 scenes.append({'image_id': f'painting_{index:04}', 'original_path': original, 'clip_path': clip})
             duration = 14.0
@@ -213,6 +224,14 @@ class LeanRenderChecks(unittest.TestCase):
             audio_stream = next(s for s in probe['streams'] if s['codec_type'] == 'audio')
             self.assertGreater(float(audio_stream['duration']), duration + 1.8)  # Silence padded, not cut at the last word.
             self.assertIsNone(manifest['title_card'])
+            self.assertEqual([s['framing'] for s in manifest['scenes']], ['fill', 'whole']); self.assertTrue(manifest['letterbox'])
+            frame = root / 'landscape.png'
+            subprocess.run(['ffmpeg', '-nostdin', '-v', 'error', '-ss', '12', '-i', str(root / 'film' / 'film.mp4'), '-frames:v', '1', str(frame)],
+                           check=True, timeout=60)
+            with Image.open(frame) as still:
+                still = still.convert('RGB')
+                self.assertLess(max(still.getpixel((540, 150))), 40)       # Charcoal above the landscape painting.
+                r, g, b = still.getpixel((20, 960)); self.assertGreater(g, 60); self.assertLess(r, 40)  # Painting reaches the left edge: nothing cut.
 
             # A title with length 0 means no card at all.
             none = compose_film(root=root, narration_wav=audio, report=report, timing=timing, scenes=scenes,

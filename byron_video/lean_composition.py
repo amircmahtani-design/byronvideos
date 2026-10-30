@@ -31,7 +31,7 @@ import subprocess
 import tempfile
 import time
 
-from PIL import Image, ImageChops, ImageDraw, ImageOps, ImageStat
+from PIL import Image, ImageChops, ImageDraw, ImageFont, ImageOps, ImageStat
 
 from .engine import Caption, _colour, _font, draw_caption, make_captions, wrap_caption, write_srt
 from .portrait_composition import input_options, presentation, run, run_bounded, validate_words
@@ -47,6 +47,11 @@ TITLE_SECONDS = 2.0  # Default silent opening card (story title + byline); the n
 TITLE_FADE = 0.2  # Card fade in and out, as a share of its length (at most 0.8 s each).
 TITLE_REST = 0.1  # Charcoal between the card and the first painting's own fade, as a share (at most 0.4 s).
 TITLE_BYLINE = 'Lord Byron'
+TITLE_FONT_FILE = Path(__file__).resolve().parent.parent / 'style-guide/fonts/Italianno-Regular.ttf'
+TITLE_FONT_SHA256 = 'f6ae96dea0da46c73370eb0575848ab0eda190315bdfda3f5b252bba3dc9173c'
+TITLE_WEIGHT = 0.022  # Outline as a share of the letter size: the approved "larger + bolder" handwriting.
+COVER_LOSS = 0.06  # A painting may fill the frame edge to edge only if that hides at most 6% of it.
+CAPTION_TOP = 0.80  # Short (landscape) paintings sit above this line, leaving the captions their own space.
 TWO_MOMENTS_SCENE = 24.0
 ONE_PASS_SCENE = 13.0
 JOIN_SIZE = (135, 240)
@@ -283,6 +288,28 @@ def native_fps(path):
     return None
 
 
+def clip_size(path):
+    info = json.loads(run_bounded(['ffprobe', '-v', 'error', *input_options(path, video=True), '-select_streams', 'v:0',
+        '-show_entries', 'stream=width,height', '-of', 'json', str(path)], 30, 65536).stdout)
+    stream = (info.get('streams') or [{}])[0]
+    width, height = stream.get('width'), stream.get('height')
+    require(type(width) is int and type(height) is int and width > 0 and height > 0, 'The animated clip could not be measured.')
+    return width, height
+
+def art_box(clip_width, clip_height, width, height):
+    """Where the painting sits in the frame: (art_width, art_height, left, top, framing).
+
+    The whole painting is always shown. Only a painting already close to the frame's shape fills it edge
+    to edge, losing at most COVER_LOSS of its area; any other shape is scaled to fit on the charcoal ground,
+    kept above the caption lines where it is short enough to leave room."""
+    cover = max(width / clip_width, height / clip_height)
+    if 1 - (width * height) / (clip_width * cover * clip_height * cover) <= COVER_LOSS:
+        return width, height, 0, 0, 'fill'
+    scale = min(width / clip_width, height / clip_height)
+    art_width, art_height = (max(2, round(v * scale / 2) * 2) for v in (clip_width, clip_height))
+    top = min((height - art_height) // 2, max(0, round(height * CAPTION_TOP) - art_height))
+    return art_width, art_height, (width - art_width) // 2, top, 'whole'
+
 def anchor_frame(path, width, height):
     """The clip's first frame (its anchor), cover-cropped exactly like ClipFrames."""
     vf = f'scale={width}:{height}:force_original_aspect_ratio=increase:flags=lanczos,crop={width}:{height},setsar=1'
@@ -347,28 +374,36 @@ def wrap_title(text, font, max_width, max_lines=3):
     lines.append(line)
     return lines if len(lines) <= max_lines and all(font.getlength(x) <= max_width for x in lines) else None
 
+def title_font(size):
+    """Italianno (SIL OFL, bundled and fingerprinted) for the handwritten opening card only."""
+    data = TITLE_FONT_FILE.read_bytes()
+    require(hashlib.sha256(data).hexdigest() == TITLE_FONT_SHA256, 'The title card font file changed.')
+    return ImageFont.truetype(io.BytesIO(data), size)
+
 def title_card(width, height, title, byline, style):
-    """Charcoal card: the story title in parchment, a short gold rule, the byline in gold. Never narrated."""
+    """Charcoal card: the story title handwritten in parchment, a short gold rule, the byline handwritten in gold.
+    Never narrated. Italianno has one weight, so a same-colour outline (TITLE_WEIGHT of the size) makes it bolder."""
     card = Image.new('RGB', (width, height), _colour(style, 'charcoal'))
     draw = ImageDraw.Draw(card)
-    safe = round(width * style['captions']['safe_width_fraction'])
-    for fraction in (0.05, 0.044, 0.038, 0.032, 0.027):  # Long titles step down in size rather than overflow.
-        font = _font(round(height * fraction), style)
+    parchment, gold = _colour(style, 'parchment'), _colour(style, 'gold')
+    safe = round(width * 0.86)
+    for fraction in (0.095, 0.085, 0.075, 0.065, 0.055, 0.047, 0.04):  # Long titles step down in size rather than overflow.
+        font = title_font(round(height * fraction))
         lines = wrap_title(title, font, safe)
         if lines:
             break
     require(lines is not None, 'The story title is too long for the opening card.')
-    line_height = round(font.size * 1.3)
-    byline_font = _font(round(height * 0.024), style)
-    gap = round(height * 0.03)
-    block = line_height * len(lines) + gap * 2 + byline_font.size
-    y = (height - block) / 2 + line_height / 2
+    byline_font = title_font(round(height * 0.052))
+    line_height, gap = font.size, round(height * 0.016)
+    y = height / 2 - line_height * len(lines) / 2 - byline_font.size * 0.4
     for line in lines:
-        draw.text((width / 2, y), line, fill=_colour(style, 'parchment'), font=font, anchor='mm')
+        draw.text((width / 2, y + line_height / 2), line, fill=parchment, font=font, anchor='mm',
+                  stroke_width=max(1, round(font.size * TITLE_WEIGHT)), stroke_fill=parchment)
         y += line_height
-    rule_y = y - line_height / 2 + gap
-    draw.line((width / 2 - width * 0.06, rule_y, width / 2 + width * 0.06, rule_y), fill=_colour(style, 'gold'), width=max(1, round(height / 900)))
-    draw.text((width / 2, rule_y + gap + byline_font.size / 2), byline, fill=_colour(style, 'gold'), font=byline_font, anchor='mm')
+    rule_y = y + gap
+    draw.line((width / 2 - width * 0.07, rule_y, width / 2 + width * 0.07, rule_y), fill=gold, width=max(1, round(height / 640)))
+    draw.text((width / 2, rule_y + gap + byline_font.size / 2), byline, fill=gold, font=byline_font, anchor='mm',
+              stroke_width=max(1, round(byline_font.size * TITLE_WEIGHT)), stroke_fill=gold)
     return card
 
 def title_level(t, length):
@@ -411,15 +446,22 @@ def compose_film(*, root, narration_wav, report, timing, scenes, output, ramp=RA
         length = clip_seconds(item['clip_path'])
         end = scene['end_seconds'] + (TAIL if number == len(scenes) else 0)
         # Frame the still exactly like the clip's anchor so the dissolve never shows outlines twice.
+        box = art_box(*clip_size(item['clip_path']), w, h)  # The whole painting, never half of it.
         with Image.open(item['original_path']) as original:
-            still, alignment = align_still(ImageOps.exif_transpose(original).convert('RGB'), anchor_frame(item['clip_path'], w, h))
+            still, alignment = align_still(ImageOps.exif_transpose(original).convert('RGB'), anchor_frame(item['clip_path'], box[0], box[1]))
         items.append({'image_id': item['image_id'], 'start': scene['start_seconds'], 'end': end,
                       'plan': scene_plan(end - scene['start_seconds'], length, ramp, turn),
-                      'still': still, 'alignment': alignment, 'clip': item['clip_path']})
+                      'still': still, 'alignment': alignment, 'clip': item['clip_path'], 'box': box})
     readers, joins = {}, []
+    ground = Image.new('RGB', (w, h), _colour(style, 'charcoal'))
 
     def scene_frame(index, local):
-        return camera(scene_picture(index, local), *drift_at(items[index]['plan'], local, index))
+        art = camera(scene_picture(index, local), *drift_at(items[index]['plan'], local, index))
+        art_width, art_height, left, top, framing = items[index]['box']
+        if framing == 'fill':
+            return art
+        frame = ground.copy(); frame.paste(art, (left, top))
+        return frame
 
     def scene_picture(index, local):
         item = items[index]
@@ -427,7 +469,7 @@ def compose_film(*, root, narration_wav, report, timing, scenes, output, ramp=RA
         if part is None:
             return item['still'].copy()
         if index not in readers:
-            readers[index] = ClipFrames(item['clip'], w, h, fps)
+            readers[index] = ClipFrames(item['clip'], item['box'][0], item['box'][1], fps)
         clip = readers[index].sample(clip_time)
         if alpha >= 1:
             return clip
@@ -501,7 +543,8 @@ def compose_film(*, root, narration_wav, report, timing, scenes, output, ramp=RA
             'title_card': {'title': title, 'byline': byline, 'seconds': intro} if title else None, 'sha256': hashlib.sha256(data).hexdigest(), 'bytes': len(data),
             'crossfade_seconds': overlap, 'ramp_seconds': ramp, 'turn_seconds': turn, 'still_motion': 'eased camera breath (max 5%)', 'caption_count': len(captions),
             'scenes': [{'image_id': i['image_id'], 'start_seconds': i['start'], 'end_seconds': i['end'], 'rule': i['plan']['rule'],
-                        'clip_seconds': i['plan']['clip_seconds'], 'alignment': i['alignment'], 'parts': [asdict(s) for s in i['plan']['segments']]} for i in items],
+                        'clip_seconds': i['plan']['clip_seconds'], 'alignment': i['alignment'], 'framing': i['box'][4],
+                        'art_box': list(i['box'][:4]), 'parts': [asdict(s) for s in i['plan']['segments']]} for i in items],
             'joins': joins, 'join_threshold': join_threshold, 'flagged_joins': sum(j['flagged'] for j in joins),
-            'source_order': [i['image_id'] for i in items], 'loop': False, 'rewind': 'returns to anchor', 'letterbox': False,
+            'source_order': [i['image_id'] for i in items], 'loop': False, 'rewind': 'returns to anchor', 'letterbox': any(i['box'][4] == 'whole' for i in items),
             'elapsed_seconds': round(time.monotonic() - started, 2)}
