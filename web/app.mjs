@@ -4,7 +4,7 @@ import {MAX_SCRIPT_CHARACTERS, countWords, validateScript, validateImages, moveI
 import {hostedCapability, freezeSubmission, submitHosted, persistPending, persistHostedJob, recoverSubmission, resumeCheckpoint, persistResume, resumeResolved, resumeHosted} from './hosted.mjs';
 
 const $ = id => document.getElementById(id);
-const ui = Object.fromEntries(['exact-actions','exact-note','approve-film','renew-preview','renew-clean','clean-download','check-exact','voice','refresh-voices','voice-status','creator','inputs','script','script-count','images','paintings','empty-images','convert','connection','reconnect','error','job','job-title','job-message','job-note','progress','download','new-film','resume','resume-film','prototype-title','prototype-copy','studio-status','retry-upload','script-skips'].map(id => [id, $(id)]));
+const ui = Object.fromEntries(['exact-actions','exact-note','approve-film','renew-preview','renew-clean','clean-download','check-exact','voice','refresh-voices','voice-status','creator','inputs','script','script-count','images','paintings','empty-images','convert','connection','reconnect','error','job','job-title','job-message','job-note','progress','download','new-film','resume','resume-film','prototype-title','prototype-copy','studio-status','retry-upload','script-skips','title-seconds'].map(id => [id, $(id)]));
 let paintings = [];
 let ready = false;
 let activeJob = null;
@@ -358,7 +358,7 @@ ui.creator.addEventListener('submit', async event => {
   if (error) { showError(error); ui.error.scrollIntoView({block:'nearest'}); return; }
   if (hosted) {
     let snapshot;
-    try { snapshot = freezeSubmission(ui.script.value, paintings.map(item => item.file), voiceState, crypto.randomUUID()); }
+    try { snapshot = freezeSubmission(ui.script.value, paintings.map(item => item.file), voiceState, crypto.randomUUID(), Number(ui['title-seconds'].value)); }
     catch (error) { showError(error.message); return; }
     showError(); setBusy(true); ui.convert.textContent = 'Uploading privately…';
     try {

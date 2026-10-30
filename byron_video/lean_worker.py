@@ -30,6 +30,7 @@ from .lean_film import (LeanBudgetExceeded, LeanJobStore, LeanLedger, LeanObject
 from .provider_execution import ProviderOutcomeUnknown, plan_anchored_motion, submit_motion_once
 from .narration_check import NarrationSkipped, check as check_narration
 from .scene_placement import place
+from .spoken_text import BYLINE, prepare_story
 
 AUDIO = {'integrated_lufs': -16, 'true_peak_dbfs': -1, 'lra': 11}
 ANCHOR_BYTES = 4 * 1024 * 1024
@@ -37,6 +38,7 @@ UNCERTAIN = ('A paid step could not be confirmed, so it was not repeated and not
              'Ask the studio owner to check this film before trying again.')
 TOO_SLOW = ('The painting animations took longer than expected. Nothing was charged twice; '
             'ask the studio owner to run this same film again to collect them.')
+MESSAGE_LIMIT = 500  # LeanJobStore.fail accepts up to 500 characters.
 GENERIC = 'Your film could not be finished. Nothing was charged twice. Ask the studio owner to check this film.'
 # Plain words for the owner: where it stopped and what to fix. Never keys, text or URLs.
 STAGES = {'preparing': 'while getting ready', 'narration': 'at the narration (ElevenLabs)',
@@ -74,9 +76,23 @@ def explain(stage, error):
                    f"to record it again. (Code: narration skipped {error.detail.get('missing_words', '?')} words)")
         return message if len(message) <= 300 else message[:297] + '...'
     else:
-        cause, code = 'something went wrong inside the studio.', type(error).__name__[:40]
+        # Our own check: say exactly which one failed and where, so nobody has to dig through logs.
+        code = f'{type(error).__name__[:40]} at {raised_at(error)}'
+        detail = ' '.join(str(error).split()) or 'no detail given'
+        head, tail = f'Stopped {where}: a studio check failed: “', f'”. Nothing was charged twice. (Code: {code})'
+        room = MESSAGE_LIMIT - len(head) - len(tail)
+        return head + (detail if len(detail) <= room else detail[:room - 3] + '...') + tail
     message = f'Stopped {where}: {cause} Nothing was charged twice. (Code: {code})'
     return message if len(message) <= 300 else message[:297] + '...'
+
+def raised_at(error):
+    """'file.py:line in function' of the studio code that raised, skipping the shared require() helpers."""
+    frames = traceback.extract_tb(error.__traceback__) if error.__traceback__ else []
+    ours = [f for f in frames if f.name != 'require'] or frames
+    if not ours:
+        return 'unknown place'
+    frame = ours[-1]
+    return f'{Path(frame.filename).name}:{frame.lineno} in {frame.name}'[:120]
 
 
 class LeanTimeout(RuntimeError):
@@ -117,6 +133,12 @@ def motion_anchor(data, content_type):
 def sha(data):
     return hashlib.sha256(data).hexdigest()
 
+def story_title(script):
+    """The script's title line for the silent opening card: the first set-aside heading that is not a byline.
+    The same rule (spoken_text.prepare_story) already keeps it out of the narration and captions."""
+    headings = prepare_story(script)[1]['heading'] if isinstance(script, str) else []
+    return next((line for line in headings if not BYLINE.match(line)), None)
+
 
 def lean_timing(job, report, source_reviews=None):
     """Scene timing from the narration's word times, like generation_coordinator.narration_timing
@@ -127,7 +149,14 @@ def lean_timing(job, report, source_reviews=None):
     require(report.get('exact_text') == text and report.get('media_verified') is True, 'Timing requires the exact verified narration.')
     require(type(duration) in (int, float) and math.isfinite(duration) and 0 < duration <= MAX_SECONDS and count >= 1,
             'Invalid narration coverage.')
-    require(isinstance(words, list) and words and all(0 <= w['start'] < w['end'] <= duration for w in words), 'Narration word timings required.')
+    require(isinstance(words, list) and bool(words), 'Narration word timings required.')
+    # Same rule as portrait_composition.validate_words: punctuation on its own (a spaced "—" or "…")
+    # may take no time; any token with a letter or digit must have a positive duration.
+    for w in words:
+        spoken = bool(re.search(r'\w', w.get('text', '')))
+        require(0 <= w['start'] <= w['end'] <= duration and (w['end'] > w['start'] or not spoken),
+                f"Narration word timing is invalid: “{w.get('text', '')[:40]}” at {w['start']}–{w['end']} s "
+                f"(narration is {duration} s, character {w.get('char_start', '?')}).")
     paragraph_starts = [m.end() for m in re.finditer(r'\n\s*\n', text)]
     paragraph_times = [0.0] + [next((w['start'] for w in words if w.get('char_start', -1) >= s), duration) for s in paragraph_starts]
     if len(paragraph_times) == count:
@@ -236,7 +265,8 @@ class LeanPipeline:
             print(json.dumps({'job_id': job.id, 'placement': placement}), file=sys.stderr)
         output = root / 'film' / 'film.mp4'
         manifest = self.compose(root=root, narration_wav=audio, report=report, timing=timing, scenes=scenes, output=output,
-                                join_threshold=inputs['settings']['join_difference_threshold'])
+                                join_threshold=inputs['settings']['join_difference_threshold'], title=story_title(inputs['script']),
+                                title_seconds=inputs.get('title_seconds', 2))  # Films saved before the choice existed: 2 s.
         self.stage = 'saving'
         self._progress(job, 95, 'Saving your film…')
         video = self.objects.put_file(self.owner, job.id, 'film', output, 'video/mp4')

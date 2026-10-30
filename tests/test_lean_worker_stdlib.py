@@ -3,13 +3,16 @@ import base64
 import hashlib
 import io
 import json
+import re
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 from byron_video.elevenlabs_adapter import fingerprint
+from byron_video.hosted_control import require
 from byron_video.lean_film import LeanJobStore, LeanLedger
-from byron_video.lean_worker import LeanPipeline, explain, motion_anchor, with_bounds
+from byron_video.lean_worker import LeanPipeline, explain, lean_timing, motion_anchor, story_title, with_bounds
 from byron_video.provider_execution import FileResponseStore, WireResponse, execute_narration_once
 from test_cloud_journal_stdlib import Client, PROJECT
 from test_hosted_uploads_stdlib import image_bytes
@@ -107,8 +110,10 @@ class LeanWorkerChecks(unittest.TestCase):
         eleven, fal = ElevenLabs(), Fal()
         failed = self.pipeline(eleven, fal).run(self.job.id)
         self.assertEqual(failed.status, 'failed')
-        self.assertTrue(failed.message.startswith('Stopped while putting the film together: something went wrong inside the studio.'))
-        self.assertIn('(Code: RuntimeError)', failed.message)
+        self.assertTrue(failed.message.startswith('Stopped while putting the film together: a studio check failed: “synthetic encoder failure”.'),
+                        failed.message)
+        self.assertIn('(Code: RuntimeError at test_lean_worker_stdlib.py:', failed.message)
+        self.assertIn(' in compose)', failed.message)
         self.assertEqual(eleven.calls, 1); self.assertEqual(fal.submitted, self.job.inputs['input_order'])
         steps = self.store.get(OWNER, self.job.id).steps
         self.assertTrue({'narration', 'clip_1', 'clip_4', 'anchor_1'} <= set(steps))
@@ -176,6 +181,37 @@ class LeanWorkerChecks(unittest.TestCase):
         self.assertEqual([(s['start_seconds'], s['end_seconds']) for s in placed['scenes']],
                          [(0, 6.35), (5.65, 20.35), (19.65, 31.35), (30.65, 40.0)])
         self.assertEqual([s['image_id'] for s in placed['scenes']], [s['image_id'] for s in timing['scenes']])
+
+    def test_own_check_failure_names_the_check_and_the_line_that_raised(self):
+        try:
+            require(False, 'Narration word timings required.')
+        except ValueError as error:
+            message = explain('assembly', error)
+        self.assertTrue(message.startswith('Stopped while putting the film together: a studio check failed: “Narration word timings required.”'))
+        self.assertRegex(message, r'\(Code: ValueError at test_lean_worker_stdlib\.py:\d+ in test_own_check_failure_names_the_check_and_the_line_that_raised\)$')
+        long = explain('assembly', ValueError('x' * 2000))
+        self.assertLessEqual(len(long), 500); self.assertTrue(long.endswith(')')); self.assertIn('(Code: ValueError at ', long)
+
+    def timing_job(self, text, words, duration):
+        snapshot = {'images': [{'id': f'painting_{i}'} for i in range(1, 5)], 'narrated_text': text}
+        report = {'exact_text': text, 'media_verified': True, 'duration_seconds': duration, 'words': words, 'audio_sha256': 'a' * 64}
+        return SimpleNamespace(snapshot=snapshot), report
+
+    def test_timing_accepts_silent_punctuation_but_names_a_word_without_time(self):
+        text = 'One night — the lake was still … and he wrote. Then dawn came.'
+        words = [{'text': m.group(), 'start': i * .5, 'end': i * .5 + (0 if m.group() in ('—', '…') else .4),
+                  'char_start': m.start(), 'char_end': m.end()} for i, m in enumerate(re.finditer(r'\S+', text))]
+        job, report = self.timing_job(text, words, 8.0)
+        timing, _ = lean_timing(job, report)  # Zero-length "—" and "…" were what stopped the film on 30 Oct 2026.
+        self.assertEqual(len(timing['scenes']), 4)
+        broken = [dict(w) for w in words]; broken[4]['end'] = broken[4]['start']  # "lake" with no duration
+        with self.assertRaisesRegex(ValueError, 'Narration word timing is invalid: “lake” at 2.0–2.0 s'):
+            lean_timing(*self.timing_job(text, broken, 8.0))
+
+    def test_title_line_goes_on_the_card_not_the_byline(self):
+        self.assertEqual(story_title('# The Prisoner of Chillon\nby Lord Byron\n\nMy hair is grey, but not with years.'), 'The Prisoner of Chillon')
+        self.assertEqual(story_title('Written by Lord Byron\n\nThe Prisoner of Chillon\n\nMy hair is grey, but not with years.'), 'The Prisoner of Chillon')
+        self.assertIsNone(story_title('My hair is grey, but not with years. Nor grew it white in a single night.'))
 
     def test_small_original_is_the_exact_anchor(self):
         data = image_bytes(1)

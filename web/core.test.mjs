@@ -75,6 +75,11 @@ test('hosted submission freezes voice and original ordered files without rewriti
   assert.ok(Object.isFrozen(snapshot) && Object.isFrozen(snapshot.files));
   assert.throws(()=>hostedAPI.freezeSubmission('Words.',sourceFiles(),{...voices(),removed:true},'fixture_request_0001'));
 });
+test('opening title length defaults to 2 seconds and only accepts the offered choices', () => {
+  assert.equal(hostedAPI.freezeSubmission('Words.',sourceFiles(),voices(),'fixture_request_0001').titleSeconds,2);
+  assert.equal(hostedAPI.freezeSubmission('Words.',sourceFiles(),voices(),'fixture_request_0001',0).titleSeconds,0);
+  for(const bad of [-1,6,2.5,'2',NaN]) assert.throws(()=>hostedAPI.freezeSubmission('Words.',sourceFiles(),voices(),'fixture_request_0001',bad),/opening title/);
+});
 test('private upload receipt requires exact count, unique IDs and numbered order', () => {
   assert.equal(hostedAPI.uploadedImages(uploadReceipt(),4).length,4);
   for(const change of [p=>p.images.reverse(),p=>p.images.pop(),p=>p.images[0].id='../bad/path',p=>p.images[1].id=p.images[0].id,p=>p.upload_id='']) {
@@ -90,7 +95,7 @@ test('hosted transport bridges upload and JSON job with one stable key and froze
   assert.deepEqual(result,{id:'fixture_job_1'}); assert.equal(calls.length,2);
   assert.deepEqual(calls[0].options.body.getAll('images').map(f=>f.name),snapshot.files.map(f=>f.name));
   for(const c of calls) {assert.equal(c.options.headers['Idempotency-Key'],snapshot.key);assert.equal(c.options.headers['X-CSRF-Token'],'x'.repeat(32));assert.equal(c.options.credentials,'same-origin');}
-  assert.deepEqual(JSON.parse(calls[1].options.body),{script:snapshot.script,images:uploadReceipt().images,voice_id:'fixture_voice_1'});
+  assert.deepEqual(JSON.parse(calls[1].options.body),{script:snapshot.script,images:uploadReceipt().images,voice_id:'fixture_voice_1',title_seconds:2});
   assert.deepEqual(checkpoints,[{key:snapshot.key,stage:'upload'},{key:snapshot.key,stage:'job'}]);
 });
 test('unknown upload outcome never starts a film or retries', async () => {

@@ -11,11 +11,14 @@ export function hostedCapability(value) {
     ? Object.freeze({csrf: value.csrf_token, live: accepted, ...(preview ? {preview:true} : {})}) : null;
 }
 
-export function freezeSubmission(script, files, voices, key) {
+export const TITLE_SECONDS = Object.freeze([0, 1, 2, 3, 4, 5]); // 0 = no opening title card.
+
+export function freezeSubmission(script, files, voices, key, titleSeconds = 2) {
   const error = validateScript(script) || validateImages(files);
   if (error) throw new Error(error);
   if (typeof key !== 'string' || !/^[A-Za-z0-9_-]{16,128}$/.test(key)) throw new Error('A secure submission reference is required.');
-  return Object.freeze({script, files:Object.freeze([...files]), voice:snapshotVoice(voices), key});
+  if (!TITLE_SECONDS.includes(titleSeconds)) throw new Error('Choose how long the opening title is shown.');
+  return Object.freeze({script, files:Object.freeze([...files]), voice:snapshotVoice(voices), key, titleSeconds});
 }
 
 export function uploadedImages(payload, count) {
@@ -71,7 +74,7 @@ export async function submitHosted(snapshot, capability, send, checkpoint) {
     catch { checkpointFailed = true; throw new Error('Your upload was accepted, but its recovery checkpoint could not be saved. No film request was sent. Ask the administrator to review this submission reference.'); }
     response = await send('/api/jobs', {method:'POST', credentials:'same-origin',
       headers:{...headers, 'Content-Type':'application/json'},
-      body:JSON.stringify({script:snapshot.script, images, voice_id:snapshot.voice.id})});
+      body:JSON.stringify({script:snapshot.script, images, voice_id:snapshot.voice.id, title_seconds:snapshot.titleSeconds})});
     // 402: over the signed budget; 423: another film is still being made. Both refuse before anything starts.
     definiteRejection = [400,401,402,403,413,415,422,423].includes(response.status);
     data = await response.json();

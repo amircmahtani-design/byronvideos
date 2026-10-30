@@ -11,8 +11,9 @@ from pathlib import Path
 
 from PIL import Image
 
-from byron_video.lean_composition import (DEPTH, FADE, ONE_PASS_SCENE, RAMP, TURN, TWO_MOMENTS_SCENE, align_still, camera, drift_at,
-                                          frame_difference, scene_plan, state_at, still_frame, still_windows)
+from byron_video.lean_composition import (DEPTH, FADE, ONE_PASS_SCENE, RAMP, TITLE_REST, TITLE_SECONDS, TURN, TWO_MOMENTS_SCENE,
+                                          align_still, camera, drift_at, frame_difference, scene_plan, state_at, still_frame,
+                                          still_windows, title_card, title_level)
 
 ANCHOR_TOLERANCE = 1e-6
 
@@ -140,6 +141,28 @@ class SceneRuleChecks(unittest.TestCase):
             self.assertEqual(frame.size, (135, 240)); self.assertLess(frame_difference(frame, base), 2)
 
 
+class TitleCardChecks(unittest.TestCase):
+    def test_card_shows_title_and_byline_and_fits_long_titles(self):
+        from byron_video.portrait_composition import presentation
+        style = presentation()
+        plain = Image.new('RGB', (1080, 1920), (0x14, 0x14, 0x16))
+        for title in ('Darkness', 'The Prisoner of Chillon and Other Tales of Captivity on the Shores of a Quiet Mountain Lake'):
+            with self.subTest(title=title[:20]):
+                card = title_card(1080, 1920, title, 'Lord Byron', style)
+                self.assertEqual(card.size, (1080, 1920)); self.assertGreater(frame_difference(card, plain), 0.2)
+                self.assertEqual(card.getpixel((0, 0)), (0x14, 0x14, 0x16))  # Charcoal edges; text stays inside the safe width.
+                self.assertEqual(card.crop((0, 0, 90, 1920)).getextrema(), ((0x14, 0x14), (0x14, 0x14), (0x16, 0x16)))
+
+    def test_card_fades_in_holds_and_rests_on_charcoal_before_the_story(self):
+        self.assertEqual(TITLE_SECONDS, 2.0)  # Default length.
+        for length in (1, 2, 3, 4, 5):
+            with self.subTest(length=length):
+                self.assertEqual(title_level(0, length), 0)
+                self.assertEqual(title_level(length * .45, length), 1)  # Fully readable mid-card at every length.
+                self.assertEqual(title_level(length - min(.4, length * TITLE_REST), length), 0)
+                self.assertEqual(title_level(length - .01, length), 0)  # Charcoal just before the story fades in.
+
+
 def tool(name):
     return shutil.which(name) is not None
 
@@ -162,7 +185,8 @@ class LeanRenderChecks(unittest.TestCase):
             audio = root / 'narration.wav'
             with wave.open(str(audio), 'wb') as sound:
                 sound.setnchannels(1); sound.setsampwidth(2); sound.setframerate(24000)
-                sound.writeframes(b'\x00\x00' * int(24000 * duration))
+                sound.writeframes(b''.join(int(6000 * math.sin(2 * math.pi * 440 * i / 24000)).to_bytes(2, 'little', signed=True)
+                                           for i in range(int(24000 * duration))))  # Audible tone: the title card must stay silent.
             tokens = list(re.finditer(r'\S+', text)); step = (duration - 1) / len(tokens)
             words = [{'text': m.group(), 'start': round(i * step, 3), 'end': round(i * step + step * .8, 3),
                       'char_start': m.start(), 'char_end': m.end()} for i, m in enumerate(tokens)]
@@ -188,6 +212,31 @@ class LeanRenderChecks(unittest.TestCase):
             self.assertTrue(math.isclose(manifest['voice_seconds'], duration))
             audio_stream = next(s for s in probe['streams'] if s['codec_type'] == 'audio')
             self.assertGreater(float(audio_stream['duration']), duration + 1.8)  # Silence padded, not cut at the last word.
+            self.assertIsNone(manifest['title_card'])
+
+            # A title with length 0 means no card at all.
+            none = compose_film(root=root, narration_wav=audio, report=report, timing=timing, scenes=scenes,
+                                output=root / 'none' / 'film.mp4', join_threshold=5, title='A Harbour at Dawn', title_seconds=0)
+            self.assertIsNone(none['title_card']); self.assertTrue(math.isclose(none['duration_seconds'], duration + 2.0))
+
+            # With a title: a silent card first (default 2 s), then the same film shifted later by TITLE_SECONDS.
+            titled = compose_film(root=root, narration_wav=audio, report=report, timing=timing, scenes=scenes,
+                                  output=root / 'titled' / 'film.mp4', join_threshold=5, title='A Harbour at Dawn')
+            self.assertEqual(titled['title_card'], {'title': 'A Harbour at Dawn', 'byline': 'Lord Byron', 'seconds': TITLE_SECONDS})
+            self.assertTrue(math.isclose(titled['duration_seconds'], TITLE_SECONDS + duration + 2.0))
+            srt = (root / 'titled' / 'film.srt').read_text(encoding='utf-8')
+            first = re.search(r'(\d\d):(\d\d):(\d\d),(\d{3}) -->', srt).groups()
+            self.assertAlmostEqual(int(first[2]) + int(first[3]) / 1000, TITLE_SECONDS + words[0]['start'], places=2)
+            frames = root / 'titled' / 'frames'; frames.mkdir()
+            for name, at in (('card', TITLE_SECONDS / 2), ('story', TITLE_SECONDS + 3)):
+                subprocess.run(['ffmpeg', '-nostdin', '-v', 'error', '-ss', str(at), '-i', str(root / 'titled' / 'film.mp4'),
+                                '-frames:v', '1', str(frames / f'{name}.png')], check=True, timeout=60)
+            with Image.open(frames / 'card.png') as card, Image.open(frames / 'story.png') as story:
+                self.assertLess(sum(card.convert('RGB').getpixel((540, 200))), 90)  # Charcoal card, not the navy painting.
+                self.assertGreater(frame_difference(card, story), 5)
+            loud = subprocess.run(['ffmpeg', '-nostdin', '-v', 'info', '-t', str(TITLE_SECONDS - .2), '-i', str(root / 'titled' / 'film.mp4'),
+                                   '-af', 'volumedetect', '-f', 'null', '-'], capture_output=True, text=True, timeout=60).stderr
+            self.assertRegex(loud, r'max_volume: -(9[0-9]|inf)')  # Nothing is read aloud over the card.
 
 
 if __name__ == '__main__': unittest.main()

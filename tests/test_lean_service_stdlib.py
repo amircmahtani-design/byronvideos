@@ -110,6 +110,18 @@ class LeanRouteChecks(unittest.TestCase):
         self.assertEqual(response.status_code, 402); self.assertIn('$0.50', response.json()['detail'])
         self.assertIsNone(self.store.find(OWNER, KEY)); self.assertEqual(self.started, [])
 
+    def test_opening_title_length_is_frozen_with_the_film(self):
+        for bad in (-1, 6, 2.5, '2'):
+            self.assertEqual(self.http.post('/api/jobs', json={**body(), 'title_seconds': bad}, headers=GOOD).status_code, 422)
+        self.assertEqual(self.started, [])
+        job_id = self.http.post('/api/jobs', json={**body(), 'title_seconds': 3}, headers=GOOD).json()['id']
+        self.assertEqual(self.store.get(OWNER, job_id).inputs['title_seconds'], 3)
+        self.assertEqual(self.http.post('/api/jobs', json={**body(), 'title_seconds': 4}, headers=GOOD).status_code, 409)  # Same key, other choice.
+
+    def test_opening_title_defaults_to_two_seconds(self):
+        job_id = self.http.post('/api/jobs', json=body(), headers=GOOD).json()['id']
+        self.assertEqual(self.store.get(OWNER, job_id).inputs['title_seconds'], 2)
+
     def test_unknown_voice_and_unordered_paintings_are_rejected(self):
         self.assertEqual(self.http.post('/api/jobs', json={**body(), 'voice_id': 'UNKNOWN_VOICE_1'}, headers=GOOD).status_code, 422)
         reordered = body(); reordered['images'][0]['position'] = 2; reordered['images'][1]['position'] = 1

@@ -147,10 +147,12 @@ def allocations(owner_id, job_id, requests, image_ids, settings, budget):
     return result
 
 
-def freeze_inputs(*, owner_id, job_id, script, narrated_text, images, voice, profile, requests, settings, budget, request_sha256):
+def freeze_inputs(*, owner_id, job_id, script, narrated_text, images, voice, profile, requests, settings, budget, request_sha256,
+                  title_seconds=2):
     """Immutable job inputs; paintings keep the creator's numbered order."""
     require([x['position'] for x in images] == list(range(1, len(images) + 1)) and 4 <= len(images) <= 5,
             'Four or five paintings in their numbered order are required.')
+    require(type(title_seconds) is int and 0 <= title_seconds <= 5, 'The opening title lasts 0 to 5 seconds.')
     caps = {k: budget[k] for k in ('job_cap_cents', 'operation_cap_cents')}
     funded = allocations(owner_id, job_id, requests, [x['id'] for x in images], settings, caps)
     plan_sha = fingerprint({'owner_id': owner_id, 'job_id': job_id, 'request_sha256': request_sha256, 'allocations': funded})
@@ -159,7 +161,7 @@ def freeze_inputs(*, owner_id, job_id, script, narrated_text, images, voice, pro
             'images': copy.deepcopy(images), 'input_order': [x['id'] for x in images],
             'voice': {'id': voice['id'], 'name': voice['name']}, 'narration_profile': profile,
             'settings': settings, 'budget': caps, 'allocations': funded, 'estimate_cents': sum(funded.values()),
-            'plan_id': 'lean_' + job_id, 'plan_sha256': plan_sha}
+            'plan_id': 'lean_' + job_id, 'plan_sha256': plan_sha, 'title_seconds': title_seconds}
 
 
 class LeanJob:

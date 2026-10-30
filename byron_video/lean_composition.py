@@ -31,9 +31,9 @@ import subprocess
 import tempfile
 import time
 
-from PIL import Image, ImageChops, ImageOps, ImageStat
+from PIL import Image, ImageChops, ImageDraw, ImageOps, ImageStat
 
-from .engine import _colour, _font, draw_caption, make_captions, wrap_caption, write_srt
+from .engine import Caption, _colour, _font, draw_caption, make_captions, wrap_caption, write_srt
 from .portrait_composition import input_options, presentation, run, run_bounded, validate_words
 
 RAMP = 3.0  # Ease from rest / into rest at an anchor (the original pose).
@@ -43,6 +43,10 @@ DEPTH = 3.0  # Clip seconds an out-and-back movement travels before turning back
 TAIL = 2.0  # Seconds the last painting lingers after the final word.
 CLOSING_FADE = 1.5  # Gentle fade to charcoal within that tail.
 CAPTION_HOLD = 1.3  # A caption stays up across a pause up to this long (sentence and paragraph pauses).
+TITLE_SECONDS = 2.0  # Default silent opening card (story title + byline); the narration starts after it.
+TITLE_FADE = 0.2  # Card fade in and out, as a share of its length (at most 0.8 s each).
+TITLE_REST = 0.1  # Charcoal between the card and the first painting's own fade, as a share (at most 0.4 s).
+TITLE_BYLINE = 'Lord Byron'
 TWO_MOMENTS_SCENE = 24.0
 ONE_PASS_SCENE = 13.0
 JOIN_SIZE = (135, 240)
@@ -331,8 +335,54 @@ class ClipFrames:
         self.frames, self.cache = [], {}
 
 
-def compose_film(*, root, narration_wav, report, timing, scenes, output, ramp=RAMP, turn=TURN, join_threshold=18.0, style=None):
-    """scenes: [{'image_id','original_path','clip_path'}] in the frozen numbered order."""
+def wrap_title(text, font, max_width, max_lines=3):
+    """Balanced greedy wrap; None when it needs more than max_lines at this size."""
+    lines, line = [], ''
+    for word in text.split():
+        trial = f'{line} {word}'.strip()
+        if line and font.getlength(trial) > max_width:
+            lines.append(line); line = word
+        else:
+            line = trial
+    lines.append(line)
+    return lines if len(lines) <= max_lines and all(font.getlength(x) <= max_width for x in lines) else None
+
+def title_card(width, height, title, byline, style):
+    """Charcoal card: the story title in parchment, a short gold rule, the byline in gold. Never narrated."""
+    card = Image.new('RGB', (width, height), _colour(style, 'charcoal'))
+    draw = ImageDraw.Draw(card)
+    safe = round(width * style['captions']['safe_width_fraction'])
+    for fraction in (0.05, 0.044, 0.038, 0.032, 0.027):  # Long titles step down in size rather than overflow.
+        font = _font(round(height * fraction), style)
+        lines = wrap_title(title, font, safe)
+        if lines:
+            break
+    require(lines is not None, 'The story title is too long for the opening card.')
+    line_height = round(font.size * 1.3)
+    byline_font = _font(round(height * 0.024), style)
+    gap = round(height * 0.03)
+    block = line_height * len(lines) + gap * 2 + byline_font.size
+    y = (height - block) / 2 + line_height / 2
+    for line in lines:
+        draw.text((width / 2, y), line, fill=_colour(style, 'parchment'), font=font, anchor='mm')
+        y += line_height
+    rule_y = y - line_height / 2 + gap
+    draw.line((width / 2 - width * 0.06, rule_y, width / 2 + width * 0.06, rule_y), fill=_colour(style, 'gold'), width=max(1, round(height / 900)))
+    draw.text((width / 2, rule_y + gap + byline_font.size / 2), byline, fill=_colour(style, 'gold'), font=byline_font, anchor='mm')
+    return card
+
+def title_level(t, length):
+    """Card opacity over charcoal at t seconds into the opening: fade in, hold, fade out, short rest.
+    Fades scale with the chosen length, so even a 1 s title holds fully readable for half its time."""
+    fade, rest = min(0.8, length * TITLE_FADE), min(0.4, length * TITLE_REST)
+    return min(ease(t / fade), ease((length - rest - t) / fade))
+
+def compose_film(*, root, narration_wav, report, timing, scenes, output, ramp=RAMP, turn=TURN, join_threshold=18.0, style=None,
+                 title=None, byline=TITLE_BYLINE, title_seconds=TITLE_SECONDS):
+    """scenes: [{'image_id','original_path','clip_path'}] in the frozen numbered order.
+    title: shown silently for title_seconds on an opening card with the byline (0 or no title: no card);
+    the narration and every scene start after it."""
+    require(type(title_seconds) in (int, float) and 0 <= title_seconds <= 5, 'The opening title lasts 0 to 5 seconds.')
     started = time.monotonic()
     style = style or presentation()
     w, h, fps = (style['canvas'][k] for k in ('width', 'height', 'fps'))
@@ -351,6 +401,10 @@ def compose_film(*, root, narration_wav, report, timing, scenes, output, ramp=RA
         wrap_caption(caption.text, font, round(w * style['captions']['safe_width_fraction']))
     # The film does not end on the last word: the final painting lingers in silence, then fades out.
     voice, duration = duration, duration + TAIL
+    # Optional silent opening card; everything after it (pictures, voice, captions) moves later by `intro`.
+    title = ' '.join((title or '').split()) if title_seconds else ''
+    intro = float(title_seconds) if title else 0.
+    card = title_card(w, h, title, byline, style) if title else None
     items = []
     for number, (scene, item) in enumerate(zip(timing['scenes'], scenes), 1):
         require(scene['image_id'] == item['image_id'], 'Scene order differs from the numbered paintings.')
@@ -388,7 +442,7 @@ def compose_film(*, root, narration_wav, report, timing, scenes, output, ramp=RA
         return Image.blend(background, clip, alpha)
 
     enc, capstarts = style['encoding'], [c.start for c in captions]
-    total = math.ceil(duration * fps - 1e-9)
+    total, charcoal = math.ceil((intro + duration) * fps - 1e-9), Image.new('RGB', (w, h), _colour(style, 'charcoal'))
     with tempfile.TemporaryDirectory(prefix='lean-', dir=output.parent) as temp:
         encoded = Path(temp) / 'film.mp4'
         with (Path(temp) / 'encoder.log').open('wb') as errors:
@@ -396,12 +450,17 @@ def compose_film(*, root, narration_wav, report, timing, scenes, output, ramp=RA
                 '-i', 'pipe:0', *input_options(narration_wav, video=False), '-i', str(narration_wav), '-map', '0:v:0', '-map', '1:a:0',
                 '-c:v', enc['video_codec'], '-preset', enc['video_preset'], '-crf', str(enc['crf']), '-threads', str(enc['encoder_threads']),
                 '-pix_fmt', enc['pixel_format'], '-colorspace', style['canvas']['colour_space'], '-color_primaries', style['canvas']['colour_space'],
-                '-color_trc', style['canvas']['colour_space'], '-af', f'apad=pad_dur={TAIL}', '-c:a', enc['audio_codec'], '-b:a', enc['audio_bitrate'],
-                '-movflags', '+faststart', '-t', f'{duration:.9f}', str(encoded)]
+                '-color_trc', style['canvas']['colour_space'],
+                '-af', (f'adelay={round(intro * 1000)}:all=1,' if intro else '') + f'apad=pad_dur={TAIL}', '-c:a', enc['audio_codec'], '-b:a', enc['audio_bitrate'],
+                '-movflags', '+faststart', '-t', f'{intro + duration:.9f}', str(encoded)]
             process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=errors)
             try:
                 for number in range(total):
-                    t = number / fps
+                    t = number / fps - intro
+                    if t < 0:  # Opening card: silent, no captions; ends on charcoal before the first painting fades in.
+                        level = title_level(number / fps, intro)
+                        process.stdin.write((Image.blend(charcoal, card, level) if level > 0 else charcoal).tobytes())
+                        continue
                     active = [i for i, item in enumerate(items) if item['start'] <= t < item['end']][-2:] or [len(items) - 1]
                     for old in set(readers) - set(active):
                         readers.pop(old).close()
@@ -412,7 +471,7 @@ def compose_film(*, root, narration_wav, report, timing, scenes, output, ramp=RA
                     level = min(1, t / style['transitions']['opening_fade_seconds'],
                                 max(0, ease((duration - t) / max(CLOSING_FADE, style['transitions']['closing_fade_seconds']))))
                     if level < 1:
-                        frame = Image.blend(Image.new('RGB', (w, h), _colour(style, 'charcoal')), frame, level)
+                        frame = Image.blend(charcoal, frame, level)
                     ci = bisect.bisect_right(capstarts, t) - 1
                     # Hold a caption through a storyteller pause rather than flickering off between sentences.
                     held = ci >= 0 and (t <= captions[ci].end or (ci + 1 < len(captions) and captions[ci + 1].start - captions[ci].end <= CAPTION_HOLD))
@@ -429,14 +488,15 @@ def compose_film(*, root, narration_wav, report, timing, scenes, output, ramp=RA
         info = json.loads(run(['ffprobe', '-v', 'error', *input_options(encoded, video=True), '-show_format', '-show_streams', '-of', 'json', str(encoded)], 30).stdout)
         videos = [x for x in info['streams'] if x['codec_type'] == 'video']; sounds = [x for x in info['streams'] if x['codec_type'] == 'audio']
         require(len(videos) == len(sounds) == 1 and videos[0]['codec_name'] == 'h264' and sounds[0]['codec_name'] == 'aac'
-                and (videos[0]['width'], videos[0]['height']) == (w, h) and abs(float(info['format']['duration']) - duration) <= 1 / fps + .05,
+                and (videos[0]['width'], videos[0]['height']) == (w, h) and abs(float(info['format']['duration']) - (intro + duration)) <= 1 / fps + .05,
                 'Export verification failed.')
         run(['ffmpeg', '-nostdin', '-v', 'error', '-xerror', *input_options(encoded, video=True), '-i', str(encoded), '-f', 'null', '-'], 600)
         encoded.replace(output)
-    write_srt(output.with_suffix('.srt'), captions)
+    write_srt(output.with_suffix('.srt'), [Caption(c.text, c.start + intro, c.end + intro) for c in captions])
     data = output.read_bytes()
     return {'schema_version': 1, 'composition': 'lean-anchored-v4-aligned', 'width': w, 'height': h, 'fps': fps,
-            'duration_seconds': duration, 'voice_seconds': voice, 'tail_seconds': TAIL, 'sha256': hashlib.sha256(data).hexdigest(), 'bytes': len(data),
+            'duration_seconds': intro + duration, 'voice_seconds': voice, 'tail_seconds': TAIL,
+            'title_card': {'title': title, 'byline': byline, 'seconds': intro} if title else None, 'sha256': hashlib.sha256(data).hexdigest(), 'bytes': len(data),
             'crossfade_seconds': overlap, 'ramp_seconds': ramp, 'turn_seconds': turn, 'still_motion': 'eased camera breath (max 5%)', 'caption_count': len(captions),
             'scenes': [{'image_id': i['image_id'], 'start_seconds': i['start'], 'end_seconds': i['end'], 'rule': i['plan']['rule'],
                         'clip_seconds': i['plan']['clip_seconds'], 'alignment': i['alignment'], 'parts': [asdict(s) for s in i['plan']['segments']]} for i in items],

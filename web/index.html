@@ -53,6 +53,16 @@
           <label for="voice">Saved ElevenLabs voice</label>
           <div class="connection-row"><select id="voice" disabled aria-describedby="voice-status"><option value="">ElevenLabs not connected</option></select><button id="refresh-voices" type="button" class="quiet small">Refresh voices</button></div>
           <p id="voice-status" class="muted" role="status">Your saved voices will appear when ElevenLabs is connected.</p>
+          <label for="title-seconds">Opening title</label>
+          <div class="connection-row"><select id="title-seconds" aria-describedby="title-seconds-note">
+            <option value="0">No title</option>
+            <option value="1">1 second</option>
+            <option value="2" selected>2 seconds</option>
+            <option value="3">3 seconds</option>
+            <option value="4">4 seconds</option>
+            <option value="5">5 seconds</option>
+          </select></div>
+          <p id="title-seconds-note" class="muted">Your script’s title line is shown with “Lord Byron”, in silence, before the story begins.</p>
         </section>
         <section class="finish-card" aria-labelledby="convert-title">
           <div><p class="eyebrow">Everything else is taken care of</p><h2 id="convert-title">Ready when you are.</h2><p>British male narration · bottom captions<br>living paintings · smooth fades · portrait MP4</p><p class="muted">The provisional synthetic voice is not an imitation of a named performer.</p></div>

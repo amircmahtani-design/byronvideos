@@ -1,7 +1,7 @@
 """Owner-only lean film routes matching the existing hosted creator contract.
 
 POST /api/uploads (multipart `images`, Idempotency-Key) → {upload_id, images:[{id, position}]}
-POST /api/jobs   JSON {script, images, voice_id} + Idempotency-Key → {id, status}
+POST /api/jobs   JSON {script, images, voice_id, title_seconds} + Idempotency-Key → {id, status}
 GET  /api/jobs/{id}, /api/jobs/{id}/video, /api/submissions/{key}, /api/creator-capabilities
 Mutations require the owner session, exact Origin and session CSRF token (as admin.py).
 """
@@ -13,7 +13,7 @@ from fastapi import Header, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import Field, StrictStr
+from pydantic import Field, StrictInt, StrictStr
 from starlette.datastructures import UploadFile
 
 from .elevenlabs_adapter import plan_requests
@@ -30,6 +30,7 @@ EXPIRED = 'The studio setup has expired. Ask the owner to renew it; nothing was 
 class LeanSubmission(Submission):
     """The hosted submission shape with the studio's generous story length (see story_limits)."""
     script: StrictStr = Field(min_length=1, max_length=STORY_MAX_CHARS)
+    title_seconds: StrictInt = Field(default=2, ge=0, le=5)  # Silent opening title card; 0 = none.
 
 
 def install_lean_routes(app, *, access, owner_id, config, settings, jobs, ledger_factory, budget_reader, uploads,
@@ -119,7 +120,7 @@ def install_lean_routes(app, *, access, owner_id, config, settings, jobs, ledger
         selections = [item.model_dump() for item in body.images]
         if [x['position'] for x in selections] != list(range(1, len(selections) + 1)) or len({x['id'] for x in selections}) != len(selections):
             raise HTTPException(422, 'Use four or five different paintings in their numbered order.')
-        request_hash = digest({'script': body.script, 'images': selections, 'voice_id': body.voice_id})
+        request_hash = digest({'script': body.script, 'images': selections, 'voice_id': body.voice_id, 'title_seconds': body.title_seconds})
         try:
             existing = jobs.find(owner_id, key)
         except Exception:
@@ -168,7 +169,8 @@ def install_lean_routes(app, *, access, owner_id, config, settings, jobs, ledger
             raise HTTPException(402, f'This film would cost up to {dollars(estimate)}, but only {dollars(max(0, remaining))} '
                                      'of the approved budget is left. Nothing was started or charged.')
         build = lambda job_id: freeze_inputs(owner_id=owner_id, job_id=job_id, script=body.script, narrated_text=text, images=images,
-            voice=voice, profile=profile, requests=requests, settings=settings, budget=budget, request_sha256=request_hash)
+            voice=voice, profile=profile, requests=requests, settings=settings, budget=budget, request_sha256=request_hash,
+            title_seconds=body.title_seconds)
         try:
             job, created = jobs.reserve(owner_id, key, request_hash, build)
         except IdempotencyConflict:
