@@ -272,11 +272,12 @@ class FileResponseStore:
             destination.write(response.payload)
             destination.flush()
             os.fsync(destination.fileno())
-        directory = os.open(self.root,os.O_RDONLY)
-        try:
-            os.fsync(directory)
-        finally:
-            os.close(directory)
+        if os.name != 'nt':  # Windows cannot open a directory to fsync it; NTFS journals the new entry itself.
+            directory = os.open(self.root,os.O_RDONLY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
         return {'request_id':response.request_id,'response_ref':operation_id,
                 'response_sha256':hashlib.sha256(response.payload).hexdigest(),'response_bytes':len(response.payload)}
 
