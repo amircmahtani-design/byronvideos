@@ -162,8 +162,13 @@ def main(argv=None):
         import uvicorn
         uvicorn.run(runtime.app,host='0.0.0.0',port=args.port,proxy_headers=True,forwarded_allow_ips=forwarded,server_header=False)
         return 0
-    except Exception:
-        parser.exit(2,'Service configuration/runtime is incomplete or unverified; no deployment was attempted.\n')
+    except Exception as error:
+        # Name the exact check that refused (fixed check wording, never keys or config values) and where it was raised.
+        import traceback
+        frames=[f for f in traceback.extract_tb(error.__traceback__) if f.name!='require'] or traceback.extract_tb(error.__traceback__)
+        where=f'{Path(frames[-1].filename).name}:{frames[-1].lineno} in {frames[-1].name}' if frames else 'unknown place'
+        detail=' '.join(str(error).split())[:300] or 'no detail given'
+        parser.exit(2,f'Service did not start: {detail} (Code: {type(error).__name__} at {where}). Nothing was deployed or charged.\n')
 
 
 if __name__=='__main__':raise SystemExit(main())

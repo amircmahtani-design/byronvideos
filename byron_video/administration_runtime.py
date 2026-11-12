@@ -9,6 +9,12 @@ from starlette.staticfiles import StaticFiles
 from .hosted_control import canonical, digest, require
 
 PURPOSE = 'byron-administration-only-v1'
+# Owner setup may be signed for up to a year (was 7 days, which closed the studio every week).
+SETUP_MAX_SECONDS = 366 * 86400
+
+
+def utc(seconds):
+    return time.strftime('%d %b %Y %H:%M UTC', time.gmtime(seconds))
 
 
 def verify_administration(envelope, key, config_sha, plan_sha, *, now=None):
@@ -18,11 +24,15 @@ def verify_administration(envelope, key, config_sha, plan_sha, *, now=None):
     require(isinstance(p, dict) and set(p) == {'schema_version', 'purpose', 'config_sha256', 'plan_sha256',
         'issued_at', 'expires_at', 'owner_only', 'generation_allowed', 'provider_calls_allowed'}, 'Exact setup scope required.')
     require(type(p['schema_version']) is int and p['schema_version'] == 1 and p['purpose'] == PURPOSE
-        and p['config_sha256'] == config_sha and p['plan_sha256'] == plan_sha
-        and p['owner_only'] is True and p['generation_allowed'] is False and p['provider_calls_allowed'] is False
-        and type(p['issued_at']) is int and type(p['expires_at']) is int
-        and p['issued_at'] <= now < p['expires_at'] and 0 < p['expires_at'] - p['issued_at'] <= 7 * 86400,
-        'Setup authorization expired or scope changed.')
+        and p['owner_only'] is True and p['generation_allowed'] is False and p['provider_calls_allowed'] is False,
+        'Setup authorization has the wrong scope; sign a new one for owner setup.')
+    require(p['config_sha256'] == config_sha and p['plan_sha256'] == plan_sha,
+        'Setup authorization does not match this studio configuration (its config or plan changed); sign a new one.')
+    require(type(p['issued_at']) is int and type(p['expires_at']) is int
+        and 0 < p['expires_at'] - p['issued_at'] <= SETUP_MAX_SECONDS,
+        f'Setup authorization may last at most {SETUP_MAX_SECONDS // 86400} days; sign a new one.')
+    require(p['issued_at'] <= now, f"Setup authorization is dated in the future ({utc(p['issued_at'])}); check the clock and sign again.")
+    require(now < p['expires_at'], f"Setup authorization expired on {utc(p['expires_at'])}; sign a new one to reopen the studio.")
     require(isinstance(key, bytes) and len(key) == 32 and isinstance(envelope['signature'], str)
         and len(envelope['signature']) <= 100, 'Pinned reviewer key/signature required.')
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey

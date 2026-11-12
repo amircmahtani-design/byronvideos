@@ -46,6 +46,21 @@ class AdministrationChecks(unittest.TestCase):
             bad = copy.deepcopy(self.envelope); bad['payload'][field] = value
             with self.assertRaises(Exception): verify_administration(bad,self.key,digest(self.c),digest(self.p))
         with self.assertRaises(Exception): verify_administration(self.envelope,b'x'*32,digest(self.c),digest(self.p))
+    def test_setup_may_last_a_year_and_failures_say_exactly_why(self):
+        private = Ed25519PrivateKey.generate(); key = private.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+        def signed(**changes):
+            payload = {**self.envelope['payload'], **changes}
+            return dict(payload=payload, signature=base64.b64encode(private.sign(canonical(payload).encode())).decode())
+        now = int(time.time()); sha = (digest(self.c), digest(self.p))
+        verify_administration(signed(issued_at=now - 1, expires_at=now - 1 + 366 * 86400), key, *sha)  # A full year is fine.
+        with self.assertRaisesRegex(ValueError, 'at most 366 days'):
+            verify_administration(signed(issued_at=now - 1, expires_at=now + 367 * 86400), key, *sha)
+        with self.assertRaisesRegex(ValueError, 'expired on 06 Nov 2026 19:46 UTC; sign a new one'):
+            verify_administration(signed(issued_at=1793994360 - 7 * 86400, expires_at=1793994360), key, *sha, now=1793994360 + 86400)
+        with self.assertRaisesRegex(ValueError, 'does not match this studio configuration'):
+            verify_administration(signed(config_sha256='a' * 64), key, *sha)
+        with self.assertRaises(Exception):  # A year-long setup still needs the owner's own signature.
+            verify_administration(signed(expires_at=now + 300 * 86400), self.key, *sha)
     def test_no_dispatcher_or_generation_routes_even_with_owner_session(self):
         runtime = self.runtime(); self.assertIsNone(runtime.dispatcher)
         with TestClient(runtime.app, base_url='https://studio.example') as client:

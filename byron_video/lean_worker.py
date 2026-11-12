@@ -471,8 +471,9 @@ def main(argv=None, *, environ=None):
         check = lean_activation(config, plan, bundle['acceptance'], bundle['reviewer_public_key'])
         validate_runtime(config, private_bytes(args.sdk_lock, 128_000))
         pipeline = build_pipeline(config, check, args.workspace)
-    except Exception:
-        parser.exit(2, 'Lean worker configuration is incomplete or unverified; nothing was generated.\n')
+    except Exception as error:
+        detail = ' '.join(str(error).split())[:300] or 'no detail given'
+        parser.exit(2, f'Film worker did not start: {detail} (Code: {type(error).__name__} at {raised_at(error)}). Nothing was generated.\n')
     job = pipeline.run(job_id)
     print(json.dumps({'job_id': job_id, 'status': job.status}))
     return 0 if job.status == 'complete' else 1

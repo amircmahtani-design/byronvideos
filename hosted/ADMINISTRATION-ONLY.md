@@ -19,7 +19,7 @@ purpose: byron-administration-only-v1
 config_sha256: <SHA256 of canonical private config>
 plan_sha256: <SHA256 of canonical private processing plan>
 issued_at: <integer Unix timestamp>
-expires_at: <integer Unix timestamp, at most seven days after issuance>
+expires_at: <integer Unix timestamp, at most 366 days after issuance>
 owner_only: true
 generation_allowed: false
 provider_calls_allowed: false
