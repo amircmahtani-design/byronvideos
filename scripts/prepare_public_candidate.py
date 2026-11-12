@@ -11,7 +11,7 @@ TOP={'.dockerignore','.gitattributes','.gitignore','README.md','RELEASE.md','THI
      'Dockerfile.worker','Dockerfile.service','Dockerfile.dependencies','Dockerfile.hosted-candidate',
      'requirements.txt','requirements-dev.txt','requirements-test.txt','requirements-hosted.in'}
 HOSTED={'cloud-run.target.draft.json','deployment.private.template.json','narration-profile.draft.json','runtime-materials.template.json'}
-SCRIPTS={'install_ci_ffmpeg.py','make_demo.py','resolve_runtime_candidate.py','prepare_public_candidate.py'}
+SCRIPTS={'install_ci_ffmpeg.py','make_demo.py','resolve_runtime_candidate.py','prepare_public_candidate.py','renew_owner_setup.py'}
 WORKFLOWS={'checks.yml','hosted-runtime-candidate.yml','resolve-hosted-runtime.yml'}
 BASELINE_IMAGES={'style-guide/references/synthetic-baselines/landscape.png','style-guide/references/synthetic-baselines/portrait.png'}
 
