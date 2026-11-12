@@ -48,6 +48,17 @@ class RenewOwnerSetupChecks(unittest.TestCase):
         self.assertEqual(json.loads(text)['config'], json.loads(self.bundle.read_text(encoding='utf-8'))['config'])  # Config unchanged.
         self.assertNotIn('PRIVATE', text)
 
+    def test_lost_key_is_replaced_by_a_new_one_that_the_studio_accepts_under_its_new_pin(self):
+        key_file, out = self.root / 'keys' / 'new-owner.pem', self.root / 'renewed.json'
+        self.assertEqual(renew.main(['--bundle', str(self.bundle), '--private-key', str(key_file), '--out', str(out), '--create-key']), 0)
+        new = renew.load_private_key(key_file).public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+        text = out.read_text(encoding='utf-8')
+        parse_bootstrap_bundle(text, hashlib.sha256(new).hexdigest(), administration_only=True)
+        with self.assertRaisesRegex(ValueError, 'cannot nominate its own'):  # The old pin no longer opens it.
+            parse_bootstrap_bundle(text, self.key_sha, administration_only=True)
+        with self.assertRaisesRegex(SystemExit, 'already exists'):  # A key file is never overwritten.
+            renew.main(['--bundle', str(self.bundle), '--private-key', str(key_file), '--out', str(self.root / 'y.json'), '--create-key'])
+
     def test_wrong_key_signs_nothing_and_output_is_never_overwritten(self):
         out = self.root / 'renewed.json'
         with self.assertRaisesRegex(SystemExit, 'does not belong'):

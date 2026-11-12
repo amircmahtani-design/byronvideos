@@ -10,6 +10,10 @@ The private key is read only from the file you name; it is never printed, copied
 
 Then add renewed.json's contents as a new version of the bootstrap secret and point the studio
 service and the film job at that version.
+
+If the owner key is lost, add --create-key: a NEW key is generated and saved to --private-key (which
+must not exist yet), the bundle's public owner key is replaced, and the new fingerprint is printed.
+That fingerprint must then replace --reviewer-key-sha256 in BOTH the studio service and the film job.
 """
 import argparse
 import base64
@@ -47,14 +51,24 @@ def main(argv=None):
     parser.add_argument('--private-key', required=True, type=Path, help="Owner's Ed25519 private key file.")
     parser.add_argument('--out', required=True, type=Path, help='Where to write the renewed bundle (must not exist).')
     parser.add_argument('--days', type=int, default=365, help='Validity in days (1-366, default 365).')
+    parser.add_argument('--create-key', action='store_true', help='Owner key lost: make a new one at --private-key (must not exist).')
     args = parser.parse_args(argv)
     if not 1 <= args.days <= SETUP_MAX_SECONDS // 86400:
         raise SystemExit(f'--days must be between 1 and {SETUP_MAX_SECONDS // 86400}.')
     if args.out.exists():
         raise SystemExit('The output file already exists; choose a new name.')
-    bundle = json.loads(args.bundle.read_text(encoding='utf-8'))
-    key = load_private_key(args.private_key)
-    from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+    bundle = json.loads(args.bundle.read_text(encoding='utf-8-sig').strip())
+    from cryptography.hazmat.primitives.serialization import Encoding, NoEncryption, PrivateFormat, PublicFormat
+    if args.create_key:
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        if args.private_key.exists():
+            raise SystemExit('A key file already exists there; nothing was replaced. Choose a new file name.')
+        key = Ed25519PrivateKey.generate()
+        args.private_key.parent.mkdir(parents=True, exist_ok=True)
+        args.private_key.write_bytes(key.private_bytes(Encoding.PEM, PrivateFormat.PKCS8, NoEncryption()))
+        bundle['reviewer_public_key_base64'] = base64.b64encode(key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)).decode()
+    else:
+        key = load_private_key(args.private_key)
     public = key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
     if base64.b64encode(public).decode() != bundle.get('reviewer_public_key_base64'):
         raise SystemExit("This private key does not belong to the studio's pinned owner key; nothing was signed.")
@@ -72,6 +86,9 @@ def main(argv=None):
     parse_bootstrap_bundle(text, hashlib.sha256(public).hexdigest(), administration_only=True)  # Exactly what the studio checks.
     args.out.write_text(text, encoding='utf-8')
     print(f'Renewed owner setup written to {args.out}; valid until {utc(payload["expires_at"])}.')
+    if args.create_key:
+        print(f'NEW owner key saved to {args.private_key}. Back it up somewhere safe (password manager or private cloud folder).')
+        print(f'Set --reviewer-key-sha256 to {hashlib.sha256(public).hexdigest()} on BOTH the studio service and the film job.')
     return 0
 
 
