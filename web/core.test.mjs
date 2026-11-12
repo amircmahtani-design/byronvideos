@@ -168,6 +168,8 @@ test('accepted runtime capability requires explicit live mode and bound release 
   const value={enabled:true,mode:'hosted',protocol_version:1,live_release:true,synthetic_fixture:false,
     runtime_release_sha256:'a'.repeat(64),csrf_token:'x'.repeat(32)};
   assert.equal(hostedAPI.hostedCapability(value).live,true);
+  assert.equal(hostedAPI.hostedCapability({...value,setup_expires_at:1826000000}).setupExpiresAt,1826000000);
+  assert.equal(hostedAPI.hostedCapability({...value,setup_expires_at:'soon'}).setupExpiresAt,undefined);
   for(const invalid of [{...value,runtime_release_sha256:undefined},{...value,synthetic_fixture:true},
       {...value,runtime_release_sha256:'unreviewed'}, {...value,enabled:false}]) assert.equal(hostedAPI.hostedCapability(invalid),null);
 });
@@ -214,7 +216,17 @@ test('fixture-only capability cannot resume and malformed receipt cannot confirm
 });
 
 import {isPrivateDraft} from './core.mjs';
-import {skipNote,storySkips,storyPreview} from './core.mjs';
+import {skipNote,storySkips,storyPreview,setupReminder} from './core.mjs';
+test('studio setup renewal reminder appears 60 days ahead and turns urgent in the last 14', () => {
+  const expires = Date.UTC(2027, 10, 12, 8, 36) / 1000, day = 86400;
+  assert.equal(setupReminder(expires, expires - 61 * day), null);                  // Far off: no reminder.
+  const soon = setupReminder(expires, expires - 45 * day);
+  assert.equal(soon.urgent, false); assert.match(soon.title, /in 45 days, on 12 November 2027/);
+  assert.match(soon.text, /Byron owner key/);
+  assert.equal(setupReminder(expires, expires - 10 * day).urgent, true);
+  assert.match(setupReminder(expires, expires - 3600).title, /expires today/);
+  assert.equal(setupReminder(undefined), null);
+});
 
 test('heading lines and link-only lines are listed as not read aloud, matching spoken_text.py', () => {
   const live='The Woman Who Waited\n\nby Lord Byron\n\nbadmaddangerous.com\n\nAt thirty-six, Leila Mehra was considered the most beautiful woman in Bombay.';

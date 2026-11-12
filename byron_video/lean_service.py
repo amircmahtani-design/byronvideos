@@ -35,7 +35,7 @@ class LeanSubmission(Submission):
 
 
 def install_lean_routes(app, *, access, owner_id, config, settings, jobs, ledger_factory, budget_reader, uploads,
-                        objects, library, starter, check, release_sha256):
+                        objects, library, starter, check, release_sha256, setup_expires_at=None):
     """Mount before the static web assets. Every dependency is explicitly injected."""
     require(callable(check) and callable(starter) and callable(ledger_factory) and callable(budget_reader)
             and isinstance(release_sha256, str) and re.fullmatch(r'[0-9a-f]{64}', release_sha256), 'Explicit lean adapters required.')
@@ -83,7 +83,8 @@ def install_lean_routes(app, *, access, owner_id, config, settings, jobs, ledger
         session = await owner(request)
         return dict(enabled=True, render_ready=True, mode='hosted', protocol_version=1, csrf_token=session.csrf_token,
                     live_release=True, synthetic_fixture=False, runtime_release_sha256=release_sha256,
-                    lean_generation=True, administration_only=False)
+                    lean_generation=True, administration_only=False,
+                    setup_expires_at=setup_expires_at)  # The page reminds the owner to renew before this.
 
     @app.post('/api/uploads', status_code=201)
     async def upload(request: Request):
@@ -284,4 +285,4 @@ def install_lean_generation(app, *, parts, bindings, settings, transaction_runne
         uploads=CloudUploadStore(bindings.storage_client, bucket=target['bucket']),
         objects=LeanObjects(bindings.storage_client, bucket=target['bucket']), library=parts.library,
         starter=LeanStarter(target, HttpxCloudRunTransport(bindings.workload_token_reader)),
-        check=parts.check, release_sha256=parts.release_sha256)
+        check=parts.check, release_sha256=parts.release_sha256, setup_expires_at=getattr(parts, 'setup_expires_at', None))

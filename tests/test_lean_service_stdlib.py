@@ -66,7 +66,7 @@ class LeanRouteChecks(unittest.TestCase):
             budget_reader=lambda: budget.remaining_cents(self.config['budget']) if self.remaining is None else self.remaining,
             uploads=Uploads(), objects=self.objects, library=Library(),
             starter=lambda job_id: self.started.append(job_id) or 'projects/synthetic-project/locations/us-central1/operations/op_00000001',
-            check=lambda: True, release_sha256='e' * 64)
+            check=lambda: True, release_sha256='e' * 64, setup_expires_at=1_826_000_000)
         self.http = TestClient(app, base_url=ORIGIN)
 
     def test_capabilities_are_truthful_and_owner_only(self):
@@ -74,6 +74,8 @@ class LeanRouteChecks(unittest.TestCase):
         self.assertEqual({k: value[k] for k in ('enabled', 'render_ready', 'mode', 'protocol_version', 'live_release', 'synthetic_fixture')},
                          {'enabled': True, 'render_ready': True, 'mode': 'hosted', 'protocol_version': 1, 'live_release': True, 'synthetic_fixture': False})
         self.assertEqual(value['csrf_token'], TOKEN)
+        self.assertEqual(value['setup_expires_at'], 1_826_000_000)  # The page uses it for the renewal reminder.
+        self.assertNotIn('setup_expires_at', self.http.get('/api/health').json())  # Owner-only, not public.
         self.assertEqual(self.http.get('/api/health').json()['mode'], 'hosted')
         self.subject = None; self.assertEqual(self.http.get('/api/creator-capabilities').status_code, 401)
         self.subject = 'google_' + 'b' * 64; self.assertEqual(self.http.get('/api/creator-capabilities').status_code, 403)

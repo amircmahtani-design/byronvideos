@@ -64,6 +64,19 @@ export function storySkips(script) {
   }
   return {heading, links};
 }
+// The studio's signed setup lasts up to a year; remind the owner from 60 days before it runs out.
+export const SETUP_REMINDER_DAYS = 60, SETUP_URGENT_DAYS = 14;
+export function setupReminder(expiresAt, now = Date.now() / 1000) {
+  if (!Number.isInteger(expiresAt)) return null;
+  const days = Math.max(0, Math.floor((expiresAt - now) / 86400));
+  if (days > SETUP_REMINDER_DAYS) return null;
+  const date = new Date(expiresAt * 1000).toLocaleDateString('en-GB', {day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC'});
+  const when = days === 0 ? 'today' : days === 1 ? 'tomorrow' : `in ${days} days`;
+  return {urgent: days <= SETUP_URGENT_DAYS, days,
+    title: `Studio setup renewal due: it expires ${when}, on ${date}.`,
+    text: 'After that date the studio will stop opening until it is renewed. Renewing takes about five minutes: follow ' +
+      '“READ ME – what this is.txt” in your “Byron owner key” folder, or ask Claude to “renew the Byron studio setup”.'};
+}
 // What the "check before converting" panel shows: the title card line and the narration's first and last words.
 export function storyPreview(script, edge = 14) {
   const {heading} = storySkips(script);

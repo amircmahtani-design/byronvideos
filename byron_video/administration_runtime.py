@@ -11,6 +11,7 @@ from .hosted_control import canonical, digest, require
 PURPOSE = 'byron-administration-only-v1'
 # Owner setup may be signed for up to a year (was 7 days, which closed the studio every week).
 SETUP_MAX_SECONDS = 366 * 86400
+SETUP_REMINDER_SECONDS = 60 * 86400  # Warn the owner (film page and logs) from 60 days before expiry.
 
 
 def utc(seconds):
@@ -57,6 +58,11 @@ def assemble_administration(*, config, processing_plan, bindings, acceptance, re
         verify_administration(json.loads(frozen), key, config_sha, plan_sha)
         return True
     check()
+    left = acceptance['payload']['expires_at'] - time.time()
+    if left < SETUP_REMINDER_SECONDS:  # Also shown on the film page; this line is for the logs.
+        import sys
+        print(f"Setup authorization expires on {utc(acceptance['payload']['expires_at'])} (in {int(left // 86400)} days); "
+              'renew it with scripts/renew_owner_setup.py before then.', file=sys.stderr)
     auth = config['identity']; target = config['target']; db = config['firestore']
     require(db['database'] != '(default)' and getattr(bindings.firestore_client, '_database_string', None)
         == f"projects/{target['project_id']}/databases/{db['database']}", 'Dedicated setup database required.')
@@ -103,7 +109,8 @@ def assemble_administration(*, config, processing_plan, bindings, acceptance, re
     else:
         from types import SimpleNamespace
         generation(app, SimpleNamespace(check=check, admin_session=admin_session, identity=identity, library=library,
-            config=config, plan=plan, owners=owners, release_sha256=digest(acceptance)))
+            config=config, plan=plan, owners=owners, release_sha256=digest(acceptance),
+            setup_expires_at=acceptance['payload']['expires_at']))
     @app.get('/api/voices')
     def named_voices(request: Request):
         try:

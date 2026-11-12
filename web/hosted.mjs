@@ -8,7 +8,8 @@ export function hostedCapability(value) {
   const preview = value?.mode === 'hosted_private_preview' && value.private_preview === true && value.live_release === false && value.synthetic_fixture === false && typeof value.runtime_release_sha256 === 'string' && /^[0-9a-f]{64}$/.test(value.runtime_release_sha256);
   return value?.enabled === true && (value.mode === 'hosted' || preview) && value.protocol_version === 1 &&
     (fixture || accepted || preview) && typeof value.csrf_token === 'string' && /^[\x21-\x7e]{32,512}$/.test(value.csrf_token)
-    ? Object.freeze({csrf: value.csrf_token, live: accepted, ...(preview ? {preview:true} : {})}) : null;
+    ? Object.freeze({csrf: value.csrf_token, live: accepted, ...(preview ? {preview:true} : {}),
+        ...(Number.isInteger(value.setup_expires_at) ? {setupExpiresAt: value.setup_expires_at} : {})}) : null;
 }
 
 export const TITLE_SECONDS = Object.freeze([0, 1, 2, 3, 4, 5]); // 0 = no opening title card.

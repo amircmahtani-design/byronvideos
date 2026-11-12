@@ -1,10 +1,10 @@
 import {exactCheckpoint,persistExact,exactFilmAction,exactActionResolved} from './exact-film.mjs';
-import {MAX_SCRIPT_CHARACTERS, countWords, validateScript, validateImages, moveItem, safeJobId, safeDownloadURL, displayProgress, isPrivateDraft, completedFilmNote, refreshVoiceState, voiceLabel, skipNote, storyPreview} from './core.mjs';
+import {MAX_SCRIPT_CHARACTERS, countWords, validateScript, validateImages, moveItem, safeJobId, safeDownloadURL, displayProgress, isPrivateDraft, completedFilmNote, refreshVoiceState, voiceLabel, skipNote, storyPreview, setupReminder} from './core.mjs';
 
 import {hostedCapability, freezeSubmission, submitHosted, persistPending, persistHostedJob, recoverSubmission, resumeCheckpoint, persistResume, resumeResolved, resumeHosted} from './hosted.mjs';
 
 const $ = id => document.getElementById(id);
-const ui = Object.fromEntries(['exact-actions','exact-note','approve-film','renew-preview','renew-clean','clean-download','check-exact','voice','refresh-voices','voice-status','creator','inputs','script','script-count','images','paintings','empty-images','convert','connection','reconnect','error','job','job-title','job-message','job-note','progress','download','new-film','resume','resume-film','prototype-title','prototype-copy','studio-status','retry-upload','script-skips','title-seconds','stop-film','check','check-heading','check-title','check-start','check-end','check-meta','check-go','check-edit'].map(id => [id, $(id)]));
+const ui = Object.fromEntries(['exact-actions','exact-note','approve-film','renew-preview','renew-clean','clean-download','check-exact','voice','refresh-voices','voice-status','creator','inputs','script','script-count','images','paintings','empty-images','convert','connection','reconnect','error','job','job-title','job-message','job-note','progress','download','new-film','resume','resume-film','prototype-title','prototype-copy','studio-status','retry-upload','script-skips','title-seconds','stop-film','check','check-heading','check-title','check-start','check-end','check-meta','check-go','check-edit','setup-reminder','setup-reminder-title','setup-reminder-text'].map(id => [id, $(id)]));
 let paintings = [];
 let checked = false; // The owner confirmed the "check this is the right story" panel for exactly these inputs.
 let ready = false;
@@ -121,6 +121,12 @@ async function checkRenderer() {
       ui['prototype-copy'].textContent = hosted.preview ? 'Generate a private watermarked draft to watch and assess as a whole. It is not approved for publication. Your originals and narrator stay fixed.' : hosted.live ? 'Your original paintings are uploaded privately in the order shown. Your narrator is fixed when you start. Nothing is published automatically.' : 'This fixture workspace tests private upload order and your chosen narrator. It does not call paid providers or generate a live film. Nothing is published.';
       ui.connection.textContent = hosted.preview ? 'Private DRAFT workspace connected. Choose your narrator and make a preview.' : hosted.live ? 'Private studio connected. Choose your narrator and make your film.' : 'Test workspace connected. Choose a narrator to test the private submission workflow.';
       ui['studio-status'].hidden = hosted.live; // The live studio shows only the steps; the box returns if anything breaks.
+      const reminder = setupReminder(hosted.setupExpiresAt);
+      ui['setup-reminder'].hidden = !reminder;
+      if (reminder) {
+        ui['setup-reminder'].classList.toggle('urgent', reminder.urgent);
+        ui['setup-reminder-title'].textContent = reminder.title; ui['setup-reminder-text'].textContent = reminder.text;
+      }
       return;
     }
     ready = true; localRenderer = true; showVoices();
