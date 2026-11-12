@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "status": "DRAFT_NOT_ACTIVATED",
+  "target": {
+    "schema_version": 1,
+    "status": "DRAFT",
+    "live_release": false,
+    "project_id": null,
+    "region": null,
+    "job_name": "byron-renderer",
+    "bucket": null,
+    "container_image": null,
+    "cpu": "2",
+    "memory": "4Gi",
+    "task_timeout_seconds": 1800,
+    "task_count": 1,
+    "parallelism": 1,
+    "max_retries": 0
+  },
+  "firestore": {
+    "database": "(default)",
+    "namespace": null
+  },
+  "identity": {
+    "origin": null,
+    "oauth_audience": null,
+    "creator_subjects": [],
+    "admin_subjects": [],
+    "subject_emails": {}
+  },
+  "secret_resources": {
+    "elevenlabs": null,
+    "fal": null,
+    "default_voice": null,
+    "csrf": null,
+    "google_oauth": null
+  },
+  "budget": {
+    "scope": null,
+    "approved_total_cap_cents": null,
+    "prior_spend_cents": null,
+    "job_cap_cents": null,
+    "operation_cap_cents": null
+  },
+  "narration_profile": {
+    "schema_version": 1,
+    "version": "elevenlabs-draft-0.1.0",
+    "status": "DRAFT",
+    "provider": "elevenlabs",
+    "voice_id": null,
+    "model_id": "eleven_multilingual_v2",
+    "voice_settings": null,
+    "output_format": "mp3_44100_128",
+    "seed": 0,
+    "apply_text_normalization": "off"
+  },
+  "runtime": {
+    "base_image": null,
+    "ffmpeg_version": null,
+    "sdk_lock_sha256": null,
+    "portrait_candidate_sha256": null,
+    "cloud_run_task_template_sha256": null,
+    "worker_service_account": null,
+    "service_service_account": null,
+    "csrf_secret_version": null
+  }
+}

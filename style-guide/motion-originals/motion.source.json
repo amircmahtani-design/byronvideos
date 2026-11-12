@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "version": "motion-direction-draft-0.1.1",
+  "status": "DRAFT",
+  "direction_feedback": "varied_source_supported_motion_encouraged_not_final_style_approval",
+  "final_style_approved": false,
+  "canvas": {
+    "aspect": "9:16",
+    "fit": "full_bleed",
+    "preserve_original_bytes": true
+  },
+  "source_order": "explicit_numbered_upload_order",
+  "primary_categories": [
+    "environment",
+    "fabric",
+    "light",
+    "posture",
+    "camera"
+  ],
+  "secondary_only": [
+    "hair",
+    "natural_blink"
+  ],
+  "diversity": {
+    "policy": "minimize_adjacent_repetition_then_maximize_categories",
+    "source_limited": "flag_for_review_never_invent"
+  },
+  "camera": {
+    "maximum_scale_change_fraction": 0.03,
+    "guarantee": "measure_generated_output_not_prompt"
+  },
+  "temporal": {
+    "min_scene_seconds": 4,
+    "max_scene_seconds": 60,
+    "loop": false,
+    "freeze": false,
+    "retime": false,
+    "timing_source": "existing_exact_narration_story_beat_plan"
+  },
+  "semantic": {
+    "invented_story_actions": false,
+    "pose_preserving_only": true,
+    "repeated_blink_cycle": false,
+    "prolonged_eye_closure": false
+  },
+  "source_review": {
+    "provenance": "local_human_source_review",
+    "external_vision_upload": false,
+    "missing_capabilities": "fail_before_generation"
+  },
+  "anchors": "same_original_start_end_where_provider_supports",
+  "approval": "full_clip_and_film_human_review_required",
+  "protocol_sha256": "efd38c7f06e8e6e0c91a5b1533424250d2db867feb401f27e7d6d2e6f7a5f70c",
+  "implementation_sha256": "5796aa29f0175727f44edb8bb795bb80f10c141c920cad31815ea9bd2a17d49d"
+}

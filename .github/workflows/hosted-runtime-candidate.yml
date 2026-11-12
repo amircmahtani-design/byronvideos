@@ -1,0 +1,51 @@
+name: Hosted candidate pinned-runtime check (manual, no deployment)
+on:
+  workflow_dispatch:
+    inputs:
+      test_runtime_image:
+        description: Reviewed public dependency-only test image, repository@sha256 digest (includes pytest)
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  candidate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # verified v4.2.2
+        with:
+          persist-credentials: false
+      - name: Validate image argument (never shell-interpolate untrusted input)
+        env:
+          RUNTIME_IMAGE: ${{ inputs.test_runtime_image }}
+        run: |
+          python3 - <<'PY'
+          import os,re
+          value=os.environ['RUNTIME_IMAGE']
+          if not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9./_-]*@sha256:[a-f0-9]{64}',value):
+              raise SystemExit('Reviewed immutable public dependency image required')
+          PY
+      - name: Build application image only (no credentials, no push)
+        env:
+          RUNTIME_IMAGE: ${{ inputs.test_runtime_image }}
+        run: |
+          docker pull "$RUNTIME_IMAGE"
+          docker build --network=none --pull=false --build-arg WORKER_BASE_IMAGE="$RUNTIME_IMAGE" -f Dockerfile.service -t byron-candidate-test .
+      - name: Full pinned Python suite, no network
+        env:
+          RUNTIME_IMAGE: ${{ inputs.test_runtime_image }}
+        run: |
+          docker run --rm --network=none --read-only --tmpfs /tmp:rw,noexec,nosuid,size=3g -v "$PWD:/app:ro" -w /app \
+            -e BYRON_REQUIRE_MEDIA_TESTS=1 -e PYTHONDONTWRITEBYTECODE=1 --entrypoint /bin/sh "$RUNTIME_IMAGE" -ec '
+              python3 /opt/byron-runtime/runtime_packaging.py installed --manifest /opt/byron-runtime/materials.json --font /app/style-guide/fonts/DejaVuSans.ttf
+              python3 -m byron_video.style --check
+              python3 -m pytest -q -p no:cacheprovider
+            '
+      - name: Existing browser-source tests (not browser QA)
+        run: |
+          node --version
+          node --test web/*.test.mjs
+          node --check web/app.mjs
+# No service-account secrets, registry credentials, deploy job or provider calls.
+# Never trigger this workflow here; image/material resolution remains separate.

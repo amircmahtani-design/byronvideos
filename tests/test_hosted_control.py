@@ -79,6 +79,28 @@ def make_app(store, dispatcher=None, **kwargs):
                               **kwargs)
 
 
+def test_voice_selection_snapshot_removed_voice_and_running_job_isolation(store):
+    voices = [{"id":"fixture_voice_1", "name":"Same name"}, {"id":"fixture_voice_2", "name":"Same name"}]
+    dispatcher = Dispatcher(store)
+    with TestClient(make_app(store, dispatcher, voice_provider=lambda owner: voices)) as client:
+        first = submit(client, {**body(), "voice_id":"fixture_voice_1"})
+        assert first.status_code == 202
+        job_id = first.json()['id']
+        job = store.get(OWNER, job_id)
+        store.record_started(OWNER, job_id, job.receipt.execution_id)
+        assert submit(client, {**body(), "voice_id":"fixture_voice_2"}).status_code == 409
+        second = submit(client, {**body(), "voice_id":"fixture_voice_2"}, key='request_000000002')
+        assert second.status_code == 202
+        voices.pop(0)
+        assert submit(client, {**body(), "voice_id":"fixture_voice_1"}, key='request_000000003').status_code == 422
+        # A repeated accepted request reuses its snapshot even after voice removal.
+        assert submit(client, {**body(), "voice_id":"fixture_voice_1"}).json()['reused'] is True
+        frozen = store.get(OWNER, job_id).snapshot
+        assert frozen['processing_plan']['narration_profile']['voice_id'] == 'fixture_voice_1'
+        assert '/fixture_voice_1/' in frozen['narration_contract']['narration_requests'][0]['url']
+        assert len(dispatcher.calls) == 2
+
+
 def submit(client, payload=None, owner=OWNER, key=KEY):
     return client.post("/api/jobs", json=payload or body(), headers=headers(owner, key))
 
@@ -321,7 +343,14 @@ def test_verified_completion_and_download_boundary_with_explicit_mock_verifier(s
         assert status["status"] == "complete" and status["progress"] == 100
         download = client.get(status["download_url"], headers=headers())
         assert download.status_code == 200 and download.content == data
-        assert download.headers["cache-control"] == "no-store"
+        # Middleware and the private download response may both emit no-store.
+        # HTTP combines these field values; directive order/duplication is not
+        # a privacy failure, but loss of either protection is.
+        cache_directives = {
+            value.strip().lower()
+            for value in download.headers["cache-control"].split(",")
+        }
+        assert cache_directives == {"private", "no-store"}
         assert len(verifier_calls) == 2 and reader_calls == [OWNER]
         assert client.get(status["download_url"], headers=headers(OTHER)).status_code == 404
         assert len(verifier_calls) == 2 and reader_calls == [OWNER]

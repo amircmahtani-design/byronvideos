@@ -1,0 +1,22 @@
+{
+  "human_style_accepted": false,
+  "live_release": false,
+  "neutral_compositor_sha256": "02a1c0d7d43eaadfa1e2f436ae8dec9490b5f21440dfcd15b263345144757709",
+  "presentation_sha256": "8ed4dad7ae848fa9bd97ecd0e4ef5f6c9f79c10ef98ab451f894598a4a6b5542",
+  "preview_compositor_sha256": "0e4bc9b73ed1b35f28b1b2861887dfa634cd83fc6c1f0a223757b60ad88a9d09",
+  "schema_version": 1,
+  "status": "PRIVATE_DRAFT_PREVIEW_ONLY",
+  "watermark": {
+    "all_frames": true,
+    "background": "#000000",
+    "font_size": 58,
+    "foreground": "#FFFFFF",
+    "height": 168,
+    "minimum_global_iou": 0.985,
+    "minimum_glyph_iou": 0.97,
+    "stripe": "#FFD400",
+    "stripe_height": 12,
+    "text": "DRAFT PRIVATE PREVIEW",
+    "width": 1080
+  }
+}

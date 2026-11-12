@@ -6,3 +6,6 @@ uvicorn==0.54.0
 python-multipart==0.0.32
 pytest==9.1.1
 httpx==0.28.1
+
+# Signed offline policy/OIDC fixtures; no credentials or provider calls.
+cryptography==50.0.2

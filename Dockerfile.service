@@ -1,0 +1,12 @@
+# Supply the same independently reviewed digest-pinned runtime/SDK lock; no installs.
+ARG WORKER_BASE_IMAGE
+FROM ${WORKER_BASE_IMAGE}
+ARG WORKER_BASE_IMAGE
+WORKDIR /app
+COPY byron_video /app/byron_video
+COPY style-guide /app/style-guide
+COPY web /app/web
+RUN BASE="$WORKER_BASE_IMAGE" python3 -c "import os; from byron_video.worker_binding import validate_container_base; validate_container_base(os.environ['BASE'])"
+RUN python3 -m byron_video.runtime_packaging installed --manifest /opt/byron-runtime/materials.json --font /app/style-guide/fonts/DejaVuSans.ttf
+USER 65532:65532
+ENTRYPOINT ["python3", "-m", "byron_video.service_bootstrap"]

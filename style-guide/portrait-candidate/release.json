@@ -1,0 +1,30 @@
+{
+  "compositor_sha256": "02a1c0d7d43eaadfa1e2f436ae8dec9490b5f21440dfcd15b263345144757709",
+  "continuation_worker_sha256": "cde5f4dd58082ad38a28beca0aea1b65f4634700ae24f2a3bf7f5f5b269a5af1",
+  "dependencies": {
+    "ffmpeg": "7.1.5-0+deb13u1",
+    "numpy": "2.5.4",
+    "pillow": "13.0.0"
+  },
+  "frozen_plan_binding": "visual_style_sha256=fingerprint(release);motion_policy_sha256=verified-motion-source",
+  "helper_engine_sha256": "a4c8a76b3921309a3d202a7f578353e123d84a395222deab884ce56fafa934e8",
+  "human_approved": false,
+  "narration_binding": "distinct_elevenlabs_release_not_legacy_kokoro",
+  "presentation_sha256": "8ed4dad7ae848fa9bd97ecd0e4ef5f6c9f79c10ef98ab451f894598a4a6b5542",
+  "private_receipt_imports_included": false,
+  "provider_rounding_geometry": {
+    "crop": {
+      "height": 1344,
+      "left": 6,
+      "top": 0,
+      "width": 756
+    },
+    "maximum_removed_area_fraction": 0.02,
+    "source_height": 1344,
+    "source_width": 768
+  },
+  "recovered_neutral_source_sha256": "1b3dcc2c718852544da3783cd6f31151d74eeccfeba16281debd5af91d7b08a9",
+  "revision": "draft-native-elevenlabs-0.1.7",
+  "schema_version": 1,
+  "status": "DRAFT_RELEASE_CANDIDATE"
+}

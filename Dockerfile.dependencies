@@ -1,0 +1,24 @@
+# Dependency-only build. Use a separate sanitized context prepared offline:
+# Dockerfile.dependencies, runtime_packaging.py, materials.json, wheels/, debs/.
+# No application/private config, credentials, provider calls or deployment here.
+# Base digest and every .deb/.whl must already be independently reviewed.
+ARG PYTHON_BASE_IMAGE
+FROM ${PYTHON_BASE_IMAGE}
+ARG PYTHON_BASE_IMAGE
+WORKDIR /opt/byron-runtime
+COPY runtime_packaging.py /opt/byron-runtime/runtime_packaging.py
+COPY materials.json /opt/byron-runtime/materials.json
+COPY wheels /opt/byron-runtime/wheels
+COPY debs /opt/byron-runtime/debs
+RUN --network=none python3 runtime_packaging.py materials --manifest materials.json --root /opt/byron-runtime --expected-base "$PYTHON_BASE_IMAGE" --write-lock requirements.lock --write-sdk-lock sdk-lock.json
+# --no-download requires archives already in APT's configured cache. Bind
+# that cache to the exact hash-verified closure, not /var/cache/apt/archives.
+RUN --network=none apt-get -o Dir::Cache::archives=/opt/byron-runtime/debs --no-download --no-remove --no-install-recommends -y install /opt/byron-runtime/debs/*.deb
+RUN --network=none python3 -m venv /opt/byron-venv
+ENV PATH="/opt/byron-venv/bin:$PATH" PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+RUN --network=none python3 -m pip install --no-index --find-links=/opt/byron-runtime/wheels --require-hashes -r /opt/byron-runtime/requirements.lock
+RUN --network=none python3 /opt/byron-runtime/runtime_packaging.py installed --manifest /opt/byron-runtime/materials.json
+RUN --network=none rm -rf /opt/byron-runtime/wheels /opt/byron-runtime/debs && chown 65532:65532 /opt/byron-runtime/sdk-lock.json && chmod 0600 /opt/byron-runtime/sdk-lock.json
+USER 65532:65532
+# No application entrypoint: dependency validation is separate from activation.
+CMD ["python3", "/opt/byron-runtime/runtime_packaging.py", "installed", "--manifest", "/opt/byron-runtime/materials.json"]
