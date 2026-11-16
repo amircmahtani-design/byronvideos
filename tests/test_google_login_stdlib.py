@@ -151,4 +151,57 @@ class LoginChecks(unittest.TestCase):
         self.assertEqual(self.finish(args).status_code,403);self.assertEqual(self.finish(args).status_code,403);self.assertEqual(self.calls,[])
 
 
+class SharedStudioLoginChecks(LoginChecks):
+    """Two permitted Google accounts, one studio: the second signs in as the first account's owner."""
+    def setUp(self):
+        super().setUp()
+        self.studio=owner_for('100000000001')
+        accounts={'100000000001':'fixture@example.test','100000000002':'second@example.test'}
+        self.identity=GoogleIdentityResolver(audience='synthetic-client',allowed_subjects=list(accounts),admin_subjects=list(accounts),csrf_secret=b'x'*32,
+            revoked=lambda o,t:self.journal.revoked(o,t,now=self.now),token_verifier=lambda t,a:self.tokens[t],clock=lambda:self.now,studio_owner=self.studio)
+        exchange=self.login.exchange
+        self.login=GoogleLogin(origin='https://studio.example',client_id='synthetic-client',redirect_uri='https://studio.example/auth/callback',
+            subject_emails=accounts,journal=self.journal,exchange=exchange,identity_resolver=self.identity,
+            enabled=True,token_verifier=lambda t,a:self.tokens[t],clock=lambda:self.now,studio_owner=self.studio)
+        app=FastAPI();self.login.mount(app);self.client=TestClient(app,base_url='https://studio.example',follow_redirects=False)
+        self.claims.update(sub='100000000002',email='second@example.test')  # Every inherited test now runs as the SECOND account.
+    def session(self):
+        from starlette.requests import Request
+        token=self.client.cookies.get(SESSION_COOKIE)
+        return self.identity(Request({'type':'http','scheme':'https','method':'GET','path':'/','server':('studio.example',443),
+                                      'headers':[(b'cookie',f'{SESSION_COOKIE}={token}'.encode())]})),token
+    # Inherited tests look sessions up by the signed-in account; in a shared studio they are filed under the studio owner.
+    def test_login_pkce_fixed_redirect_and_cookie_security(self):
+        self.assertEqual(self.finish(self.start()).status_code,303)
+        session,token=self.session()
+        self.assertEqual(session.principal.subject,self.studio)  # Same studio: same films, voices and budget.
+        self.assertFalse(self.journal.revoked(self.studio,hashed(token),now=self.now))
+    def test_rotation_revokes_previous_registered_session(self):
+        self.assertEqual(self.finish(self.start()).status_code,303);old=self.client.cookies.get(SESSION_COOKIE)
+        self.assertEqual(self.finish(self.start()).status_code,303)
+        self.assertTrue(self.journal.revoked(self.studio,hashed(old),now=self.now))
+    def test_logout_requires_origin_and_csrf_then_revokes(self):
+        self.assertEqual(self.finish(self.start()).status_code,303);session,token=self.session()
+        self.assertEqual(self.client.post('/auth/logout',headers={'origin':'https://studio.example','x-csrf-token':session.csrf_token}).status_code,204)
+        self.assertTrue(self.journal.revoked(self.studio,hashed(token),now=self.now))
+        with self.assertRaises(ValueError): self.session()  # Signed out means signed out, for the second account too.
+    def test_invalid_identity_claims_or_nonce_fail_closed(self):
+        # As for one account, but '…0002' is permitted here, so an unlisted ID and the FIRST account's email stand in.
+        for patch in ({'nonce':'wrong'},{'email_verified':False},{'sub':'100000000003'},{'email':'fixture@example.test'},
+                      {'aud':'other'},{'iss':'https://evil.example'},{'exp':999},{'iat':1001},{'azp':'other'}):
+            original=copy.deepcopy(self.claims);args=self.start();self.claims.update(patch)
+            self.assertEqual(self.finish(args).status_code,403,patch);self.claims=original
+        self.assertFalse(any('/login_sessions/' in p for p in self.db.data))
+    def test_unlisted_account_is_refused_and_its_google_id_is_logged(self):
+        import io,contextlib
+        args=self.start();self.claims.update(sub='100000000009',email='stranger@example.test');log=io.StringIO()
+        with contextlib.redirect_stderr(log): self.assertEqual(self.finish(args).status_code,403)
+        self.assertIn('Sign-in refused for stranger@example.test (Google account ID 100000000009)',log.getvalue())
+        self.assertFalse(any('/login_sessions/' in p for p in self.db.data))
+    def test_bad_studio_owner_reference_is_rejected(self):
+        with self.assertRaises(ValueError):
+            GoogleIdentityResolver(audience='a',allowed_subjects=['100000000001'],admin_subjects=['100000000001'],csrf_secret=b'x'*32,
+                                   revoked=lambda o,t:False,studio_owner='someone')
+
+
 if __name__=='__main__':unittest.main()

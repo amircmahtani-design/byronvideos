@@ -12,6 +12,7 @@ PURPOSE = 'byron-administration-only-v1'
 # Owner setup may be signed for up to a year (was 7 days, which closed the studio every week).
 SETUP_MAX_SECONDS = 366 * 86400
 SETUP_REMINDER_SECONDS = 60 * 86400  # Warn the owner (film page and logs) from 60 days before expiry.
+MAX_STUDIO_ACCOUNTS = 3  # Google accounts that may sign in to the one shared studio.
 
 
 def utc(seconds):
@@ -66,13 +67,18 @@ def assemble_administration(*, config, processing_plan, bindings, acceptance, re
     auth = config['identity']; target = config['target']; db = config['firestore']
     require(db['database'] != '(default)' and getattr(bindings.firestore_client, '_database_string', None)
         == f"projects/{target['project_id']}/databases/{db['database']}", 'Dedicated setup database required.')
-    require(set(auth['creator_subjects']) == set(auth['admin_subjects']) and len(auth['admin_subjects']) == 1,
-        'Setup mode is restricted to one owner.')
+    require(set(auth['creator_subjects']) == set(auth['admin_subjects']) and 1 <= len(auth['admin_subjects']) <= MAX_STUDIO_ACCOUNTS
+        and len(set(auth['admin_subjects'])) == len(auth['admin_subjects']),
+        f'Setup mode allows one studio shared by at most {MAX_STUDIO_ACCOUNTS} signed-in accounts.')
+    import hashlib
+    # One studio owner: the FIRST listed account. Every other permitted account signs in as that same owner,
+    # so films, saved voices, the budget and sign-out records are shared and nothing existing moves.
+    studio_owner = 'google_' + hashlib.sha256(('accounts.google.com\0' + auth['admin_subjects'][0]).encode()).hexdigest()
+    shared = studio_owner if len(auth['admin_subjects']) > 1 else None
     journal = FirestoreLoginJournal(bindings.firestore_client, project_id=target['project_id'], namespace=db['namespace'])
     identity = GoogleIdentityResolver(audience=auth['oauth_audience'], allowed_subjects=auth['admin_subjects'],
-        admin_subjects=auth['admin_subjects'], csrf_secret=bindings.csrf_secret, revoked=journal.revoked)
-    import hashlib
-    owners = ['google_' + hashlib.sha256(('accounts.google.com\0' + s).encode()).hexdigest() for s in auth['admin_subjects']]
+        admin_subjects=auth['admin_subjects'], csrf_secret=bindings.csrf_secret, revoked=journal.revoked, studio_owner=shared)
+    owners = [studio_owner]
     from .admin import AdminSession
     from .hosted_control import Principal
     from .hosted_uploads import CreatorSession
@@ -90,8 +96,8 @@ def assemble_administration(*, config, processing_plan, bindings, acceptance, re
             'name': config['secret_resources']['google_oauth'] + '/versions/latest'}).payload.data.decode('utf-8')
     GoogleLogin(origin=auth['origin'], client_id=auth['oauth_audience'], redirect_uri=auth['origin'] + '/auth/callback',
         subject_emails=auth['subject_emails'], journal=journal, exchange=GoogleCodeExchange(oauth_secret, enabled=True),
-        identity_resolver=google_identity, enabled=True, activation_check=check).mount(app)
-    install_device_cookies(app, devices, owners[0])  # Setup mode has exactly one owner.
+        identity_resolver=google_identity, enabled=True, activation_check=check, studio_owner=shared).mount(app)
+    install_device_cookies(app, devices, owners[0])  # One studio owner, shared by every permitted account.
     def admin_session(request):
         check()
         return identity.admin_session(request)

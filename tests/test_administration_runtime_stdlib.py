@@ -61,6 +61,23 @@ class AdministrationChecks(unittest.TestCase):
             verify_administration(signed(config_sha256='a' * 64), key, *sha)
         with self.assertRaises(Exception):  # A year-long setup still needs the owner's own signature.
             verify_administration(signed(expires_at=now + 300 * 86400), self.key, *sha)
+    def test_up_to_three_accounts_share_one_studio_owned_by_the_first(self):
+        import hashlib
+        first = self.c['identity']['admin_subjects'][0]
+        def with_accounts(ids):
+            c = copy.deepcopy(self.c); a = c['identity']
+            a['admin_subjects'] = a['creator_subjects'] = ids
+            a['subject_emails'] = {s: f'person{i}@example.test' for i, s in enumerate(ids)}
+            private = Ed25519PrivateKey.generate(); key = private.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+            payload = {**self.envelope['payload'], 'config_sha256': digest(c)}
+            envelope = dict(payload=payload, signature=base64.b64encode(private.sign(canonical(payload).encode())).decode())
+            return assemble_administration(config=c, processing_plan=self.p, bindings=self.bindings, acceptance=envelope, reviewer_public_key=key)
+        self.assertIsNotNone(with_accounts([first, '200000000002']))
+        with self.assertRaisesRegex(ValueError, 'at most 3'):
+            with_accounts([first, '200000000002', '200000000003', '200000000004'])
+        from byron_video.lean_film import owner_for
+        c = copy.deepcopy(self.c); c['identity']['admin_subjects'] = c['identity']['creator_subjects'] = [first, '200000000002']
+        self.assertEqual(owner_for(c), 'google_' + hashlib.sha256(('accounts.google.com\0' + first).encode()).hexdigest())
     def test_no_dispatcher_or_generation_routes_even_with_owner_session(self):
         runtime = self.runtime(); self.assertIsNone(runtime.dispatcher)
         with TestClient(runtime.app, base_url='https://studio.example') as client:

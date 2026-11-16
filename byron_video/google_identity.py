@@ -53,7 +53,7 @@ class GoogleIdentityResolver:
     journal. No caller header controls the identity or allowlist.
     """
     def __init__(self, *, audience, allowed_subjects, admin_subjects, csrf_secret,
-                 revoked, cookie_name='__Host-byron_session', token_verifier=None, clock=time.time):
+                 revoked, cookie_name='__Host-byron_session', token_verifier=None, clock=time.time, studio_owner=None):
         if (not isinstance(audience,str) or not audience or len(audience)>512
                 or not isinstance(csrf_secret,bytes) or len(csrf_secret)<32 or not callable(revoked)):
             raise ValueError('Explicit private identity configuration is required.')
@@ -65,6 +65,10 @@ class GoogleIdentityResolver:
         self._audience, self._allowed, self._admins = audience,allowed,admins
         self._secret, self._revoked, self._cookie = csrf_secret,revoked,cookie_name
         self._verify, self._clock = token_verifier or verify_google_id_token,clock
+        # Shared studio: every permitted account acts as this one owner (films, voices, budget, sign-out records).
+        if studio_owner is not None and not re.fullmatch(r'google_[0-9a-f]{64}', studio_owner):
+            raise ValueError('The shared studio owner must be a canonical owner reference.')
+        self._studio_owner = studio_owner
 
     def _session(self, request, admin=False):
         try:
@@ -88,7 +92,7 @@ class GoogleIdentityResolver:
                     or issued>now or expires<=now or expires<=issued or expires-issued>7200):
                 raise ValueError()
             # Canonical issuer prevents alternate issuer spelling changing the owner.
-            owner = 'google_' + hashlib.sha256(('accounts.google.com\0'+subject).encode()).hexdigest()
+            owner = self._studio_owner or 'google_' + hashlib.sha256(('accounts.google.com\0'+subject).encode()).hexdigest()
             token_hash = hashlib.sha256(token.encode()).hexdigest()
             if self._revoked(owner,token_hash) is not False:
                 raise ValueError()

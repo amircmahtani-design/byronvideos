@@ -135,7 +135,7 @@ class GoogleCodeExchange:
 
 class GoogleLogin:
     def __init__(self,*,origin,client_id,redirect_uri,subject_emails,journal,exchange,identity_resolver,
-                 enabled=False,token_verifier=None,clock=time.time,activation_check=None):
+                 enabled=False,token_verifier=None,clock=time.time,activation_check=None,studio_owner=None):
         parsed=urlsplit(origin)
         need(parsed.scheme=='https' and parsed.netloc and parsed.path=='' and not parsed.username and not parsed.password
              and not parsed.query and not parsed.fragment,'Exact HTTPS origin required.')
@@ -148,6 +148,9 @@ class GoogleLogin:
         self.subject_emails=dict(subject_emails);self.journal,self.exchange,self.identity=journal,exchange,identity_resolver
         self.enabled,self.verify,self.clock=enabled is True,token_verifier or verify_google_id_token,clock
         self.activation_check=activation_check
+        need(studio_owner is None or (isinstance(studio_owner,str) and re.fullmatch(r'google_[0-9a-f]{64}',studio_owner)),
+             'The shared studio owner must be a canonical owner reference.')
+        self.studio_owner=studio_owner  # Same owner the identity resolver uses, so sign-in records stay consistent.
 
     def _request(self,request,path):
         need(self.enabled,'Google login is disabled pending deployment acceptance.')
@@ -188,6 +191,11 @@ class GoogleLogin:
         claims=self.verify(token,self.client_id)  # Cryptographic verification before any claim is trusted.
         need(isinstance(claims,dict))
         subject=claims.get('sub');nonce=claims.get('nonce');issued,expires=claims.get('iat'),claims.get('exp');now=self.clock()
+        if (claims.get('iss') in ISSUERS and claims.get('aud')==self.client_id and isinstance(subject,str) and SUBJECT.fullmatch(subject)
+                and subject not in self.subject_emails and claims.get('email_verified') is True and isinstance(claims.get('email'),str)):
+            # A genuine Google account that is not on the list: record who, so the owner can add them deliberately.
+            import sys
+            print(f"Sign-in refused for {claims['email'][:254]} (Google account ID {subject}): not a permitted studio account.", file=sys.stderr)
         need(claims.get('iss') in ISSUERS and claims.get('aud')==self.client_id and claims.get('azp',self.client_id)==self.client_id
              and isinstance(subject,str) and subject in self.subject_emails and claims.get('email_verified') is True
              and isinstance(claims.get('email'),str) and claims['email'].casefold()==self.subject_emails[subject].casefold()
@@ -195,7 +203,7 @@ class GoogleLogin:
         need(type(issued) in (int,float) and type(expires) in (int,float) and math.isfinite(issued) and math.isfinite(expires)
              and issued<=now<expires and 0<expires-issued<=7200)
         self._activation()
-        self.journal.rotate(owner_for(subject),hashed(token),min(expires,now+3600),record['old_token_sha256'],now=now)
+        self.journal.rotate(self.studio_owner or owner_for(subject),hashed(token),min(expires,now+3600),record['old_token_sha256'],now=now)
         response=RedirectResponse('/',status_code=303)
         response.set_cookie(SESSION_COOKIE,token,max_age=min(3600,int(expires-now)),secure=True,httponly=True,samesite='lax',path='/')
         response.delete_cookie(LOGIN_COOKIE,secure=True,httponly=True,samesite='lax',path='/')

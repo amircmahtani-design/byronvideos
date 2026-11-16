@@ -83,8 +83,9 @@ def lean_settings(config):
 
 def owner_for(config):
     auth = config['identity']
-    require(len(auth['admin_subjects']) == 1 and set(auth['creator_subjects']) == set(auth['admin_subjects']),
-            'Lean generation is restricted to one owner.')
+    require(1 <= len(auth['admin_subjects']) <= 3 and set(auth['creator_subjects']) == set(auth['admin_subjects']),
+            'Lean generation is one shared studio for at most 3 accounts.')
+    # The studio belongs to the first listed account; any others sign in as this same owner.
     return 'google_' + hashlib.sha256(('accounts.google.com\0' + auth['admin_subjects'][0]).encode()).hexdigest()
 
 
