@@ -1,4 +1,4 @@
-"""Trusted device: after a verified Google sign-in, this browser stays signed in for 30 days.
+"""Trusted device: after a verified Google sign-in, this browser stays signed in for a year, renewed whenever the studio is opened.
 
 Google ID tokens last an hour, so the hourly sign-in is replaced by a random device pass
 issued only by a successful Google callback. The pass is a Secure, HttpOnly, SameSite=Lax
@@ -16,7 +16,8 @@ from .cloud_journal import _FirestoreBoundary
 from .google_login import RANDOM, SHA, hashed, need
 
 DEVICE_COOKIE = '__Host-byron_device'
-DEVICE_SECONDS = 30 * 86400
+DEVICE_SECONDS = 365 * 86400  # A remembered device stays signed in this long after it was last used.
+RENEW_BELOW = DEVICE_SECONDS - 86400  # Extend at most once a day, so polling never writes on every request.
 MAX_DEVICES = 32
 OWNER = re.compile(r'google_[0-9a-f]{64}\Z')
 
@@ -47,6 +48,22 @@ class FirestoreTrustedDevices(_FirestoreBoundary):
         need(row is not None and row.get('revoked') is False and row.get('expires', 0) > now
              and isinstance(row.get('owner'), str) and OWNER.fullmatch(row['owner']))
         return row['owner']
+
+    def renew(self, token, *, now=None):
+        """Rolling pass: a live, unrevoked pass used again is extended to DEVICE_SECONDS from now.
+        Returns True when it was extended (the browser cookie is then refreshed too)."""
+        now = time.time() if now is None else now
+        need(isinstance(token, str) and RANDOM.fullmatch(token))
+        ref = self._doc('trusted_devices/pool'); key = hashed(token); extended = []
+        def extend(tx):
+            current = self._read(ref, tx)
+            row = None if current is None else current['entries'].get(key)
+            if row is None or row.get('revoked') is not False or not now < row.get('expires', 0) < now + RENEW_BELOW:
+                return
+            entries = dict(current['entries']); entries[key] = {**row, 'expires': now + DEVICE_SECONDS}
+            tx.update(ref, {'entries': entries}); extended.append(True)
+        self._run(extend)
+        return bool(extended)
 
     def revoke(self, token):
         need(isinstance(token, str) and RANDOM.fullmatch(token))
@@ -108,4 +125,14 @@ def install_device_cookies(app, devices, owner):
                 try: await run_in_threadpool(devices.revoke, token)
                 except Exception: pass
             response.delete_cookie(DEVICE_COOKIE, secure=True, httponly=True, samesite='lax', path='/')
+        elif path == '/api/creator-capabilities' and response.status_code == 200:
+            # Opening the studio keeps a remembered device signed in: its pass rolls forward to a full year again.
+            token = request.cookies.get(DEVICE_COOKIE)
+            if isinstance(token, str) and RANDOM.fullmatch(token):
+                from starlette.concurrency import run_in_threadpool
+                try:
+                    if await run_in_threadpool(devices.renew, token):
+                        response.set_cookie(DEVICE_COOKIE, token, max_age=DEVICE_SECONDS, secure=True, httponly=True, samesite='lax', path='/')
+                except Exception:
+                    pass  # The pass still works until its current expiry.
         return response

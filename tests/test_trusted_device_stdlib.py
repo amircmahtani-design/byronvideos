@@ -33,7 +33,33 @@ class TrustedDeviceChecks(unittest.TestCase):
         self.identity = TrustedDeviceIdentity(Expired(), self.devices, owners=[OWNER], csrf_secret=b's' * 32,
             creator_session=lambda owner, csrf: CreatorSession(Principal(owner), csrf), admin_session=AdminSession)
 
-    def test_pass_lasts_thirty_days_and_can_be_revoked(self):
+    def test_used_pass_rolls_forward_so_a_device_stays_signed_in(self):
+        self.assertEqual(DEVICE_SECONDS, 365 * 86400)
+        token = self.devices.issue(OWNER, now=1000)
+        self.assertFalse(self.devices.renew(token, now=1000 + 3600))  # Fresh: nothing to extend (no write per request).
+        later = 1000 + 80 * 86400
+        self.assertTrue(self.devices.renew(token, now=later))  # Used again after 80 days: good for another full year.
+        self.assertEqual(self.devices.owner(token, now=later + DEVICE_SECONDS - 1), OWNER)
+        self.devices.revoke(token)
+        self.assertFalse(self.devices.renew(token, now=later + 10 * 86400))  # Signed out: never revived.
+        with self.assertRaises(ValueError): self.devices.owner(token, now=later + 10 * 86400)
+        lapsed = self.devices.issue(OWNER, now=1000)
+        self.assertFalse(self.devices.renew(lapsed, now=1000 + DEVICE_SECONDS + 1))  # Already expired: not revived.
+
+    def test_opening_the_studio_refreshes_the_device_cookie(self):
+        app = FastAPI()
+        @app.get('/api/creator-capabilities')
+        def capabilities(): return {'enabled': True}
+        install_device_cookies(app, self.devices, OWNER)
+        import time
+        token = self.devices.issue(OWNER, now=time.time() - 60 * 86400)  # Signed in two months ago.
+        client = TestClient(app, base_url='https://testserver')
+        response = client.get('/api/creator-capabilities', cookies={DEVICE_COOKIE: token})
+        cookie = [c for c in response.headers.get_list('set-cookie') if c.startswith(DEVICE_COOKIE + '=')]
+        self.assertEqual(len(cookie), 1); self.assertIn(f'Max-Age={DEVICE_SECONDS}', cookie[0])
+        self.assertEqual(self.devices.owner(token, now=time.time() + 80 * 86400), OWNER)
+
+    def test_pass_expires_and_can_be_revoked(self):
         token = self.devices.issue(OWNER, now=1000)
         self.assertEqual(self.devices.owner(token, now=1000 + DEVICE_SECONDS - 1), OWNER)
         with self.assertRaises(ValueError): self.devices.owner(token, now=1000 + DEVICE_SECONDS)
