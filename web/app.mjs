@@ -310,8 +310,12 @@ ui.download.addEventListener('click', async event => {
   const label = ui.download.innerHTML, note = ui['job-note'].textContent;
   ui.download.textContent = 'Downloading… please wait'; ui.download.setAttribute('aria-disabled', 'true'); ui.download.classList.add('working');
   ui['job-note'].textContent = 'Your film is downloading. It is a large file (often 50–100 MB), so it can take a minute. ' +
-    'On an iPad or iPhone it appears in the Files app, under Downloads. Please tap Download only once.';
-  location.assign(ui.download.href);
+    'If the iPad asks, tap Download; you stay on this page. The film appears in the Files app, under Downloads. Please tap Download only once.';
+  // Download in place: a same-origin link with a download name saves the file without leaving this page, so the
+  // studio stays on screen (navigating to the file left iPad home-screen shortcuts with no way back).
+  const link = document.createElement('a');
+  link.href = ui.download.href; link.download = ui.download.download || 'byron-film.mp4'; link.hidden = true;
+  document.body.append(link); link.click(); link.remove();
   setTimeout(() => {
     downloading = false; ui.download.innerHTML = label; ui.download.removeAttribute('aria-disabled'); ui.download.classList.remove('working');
     ui['job-note'].textContent = note + ' If the download did not arrive, tap Download MP4 again.';
