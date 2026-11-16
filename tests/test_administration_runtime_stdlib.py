@@ -4,6 +4,7 @@ import copy
 import json
 import time
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 from fastapi.testclient import TestClient
@@ -61,6 +62,21 @@ class AdministrationChecks(unittest.TestCase):
             verify_administration(signed(config_sha256='a' * 64), key, *sha)
         with self.assertRaises(Exception):  # A year-long setup still needs the owner's own signature.
             verify_administration(signed(expires_at=now + 300 * 86400), self.key, *sha)
+    def test_home_screen_icon_is_served_to_ipads(self):
+        import hashlib
+        from byron_video.app_icon import APPLE_TOUCH_ICON_SHA256
+        with TestClient(self.runtime().app, base_url='https://studio.example') as client:
+            for path in ('/apple-touch-icon.png', '/apple-touch-icon-precomposed.png'):
+                r = client.get(path)
+                self.assertEqual((r.status_code, r.headers['content-type']), (200, 'image/png'), path)
+                self.assertEqual(hashlib.sha256(r.content).hexdigest(), APPLE_TOUCH_ICON_SHA256)
+                self.assertTrue(r.content.startswith(b'\x89PNG'))
+        from PIL import Image
+        import io
+        self.assertEqual(Image.open(io.BytesIO(r.content)).size, (180, 180))
+        page = (Path(__file__).resolve().parent.parent / 'web' / 'index.html').read_text(encoding='utf-8')
+        self.assertIn('<link rel="apple-touch-icon" href="/apple-touch-icon.png">', page)
+        self.assertNotIn('apple-mobile-web-app-capable', page)  # Opens in Safari, sharing its one-year sign-in.
     def test_up_to_three_accounts_share_one_studio_owned_by_the_first(self):
         import hashlib
         first = self.c['identity']['admin_subjects'][0]

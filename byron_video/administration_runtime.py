@@ -130,6 +130,12 @@ def assemble_administration(*, config, processing_plan, bindings, acceptance, re
     @app.get('/admin', include_in_schema=False)
     def admin_page():
         return RedirectResponse('/admin.html', status_code=308)
+    @app.get('/apple-touch-icon.png', include_in_schema=False)
+    @app.get('/apple-touch-icon-precomposed.png', include_in_schema=False)
+    def home_screen_icon():
+        from fastapi.responses import Response
+        from .app_icon import APPLE_TOUCH_ICON
+        return Response(APPLE_TOUCH_ICON, media_type='image/png', headers={'Cache-Control': 'public, max-age=604800'})
     # Setup-only mode has no job/upload/resume/exact-film routes or dispatcher; lean
     # routes exist only through assemble_lean's explicit hook above.
     web_root = Path(__file__).resolve().parent.parent / 'web'
