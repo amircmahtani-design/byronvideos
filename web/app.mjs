@@ -277,7 +277,8 @@ ui['stop-film'].addEventListener('click', async () => {
   if (!id || !hosted || !confirm('Stop this film now? Anything already recorded or animated has been paid for; nothing more will be started.')) return;
   ui['stop-film'].disabled = true;
   try {
-    const response = await timedFetch(`/api/jobs/${id}/stop`, {method:'POST', credentials:'same-origin', headers:{'X-CSRF-Token':hosted.csrf}}, 30000);
+    const current = await freshHosted();
+    const response = await timedFetch(`/api/jobs/${id}/stop`, {method:'POST', credentials:'same-origin', headers:{'X-CSRF-Token':current.csrf}}, 30000);
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : 'The film could not be stopped just now. Try again in a moment.');
     stopPolling(); await pollJob();
@@ -389,6 +390,18 @@ ui['resume-film'].addEventListener('click', async () => {
     ui.resume.hidden=false;
   } finally { resumeWorking=false; ui['resume-film'].disabled=false; }
 });
+// The sign-in behind a page changes over time (the hour-long Google session hands over to the remembered-device
+// pass), and each has its own security token. Fetch the current one right before any change, so a page left open
+// for hours or overnight still works instead of asking for a reload. A plain read: nothing is sent or charged.
+async function freshHosted() {
+  const response = await timedFetch('/api/creator-capabilities', {cache:'no-store', credentials:'same-origin'});
+  if (response.status === 401) throw new Error('Your sign-in has ended. Press Sign in, then try again; nothing was sent.');
+  if (!response.ok) throw new Error('The studio could not be reached. Check the connection and try again; nothing was sent.');
+  const capability = hostedCapability(await response.json());
+  if (!capability) throw new Error('The studio could not confirm this session. Reload the page and try again; nothing was sent.');
+  hosted = capability;
+  return capability;
+}
 ui.creator.addEventListener('submit', async event => {
   event.preventDefault(); if (!ready || busy) return;
   const error = validateScript(ui.script.value) || validateImages(paintings.map(item => item.file));
@@ -400,8 +413,11 @@ ui.creator.addEventListener('submit', async event => {
     try { snapshot = freezeSubmission(ui.script.value, paintings.map(item => item.file), voiceState, crypto.randomUUID(), Number(ui['title-seconds'].value)); }
     catch (error) { showError(error.message); return; }
     showError(); setBusy(true); ui.convert.textContent = 'Uploading privately…';
+    let current;
+    try { current = await freshHosted(); }
+    catch (error) { setBusy(false); ui.convert.textContent = 'Convert to film →'; showError(error.message); return; }
     try {
-      const {id} = await submitHosted(snapshot, hosted, (url, options) => timedFetch(url, options, 120000), savePending);
+      const {id} = await submitHosted(snapshot, current, (url, options) => timedFetch(url, options, 120000), savePending);
       hostedJob = true; showJob(id); ui.job.scrollIntoView({block:'start'}); await pollJob();
     } catch (error) {
       if (error.uncertain) showUncertain(error.stage, snapshot.key, error.checkpointFailed);
