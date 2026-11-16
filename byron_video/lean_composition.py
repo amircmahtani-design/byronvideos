@@ -47,9 +47,12 @@ TITLE_SECONDS = 2.0  # Default silent opening card (story title + byline); the n
 TITLE_FADE = 0.2  # Card fade in and out, as a share of its length (at most 0.8 s each).
 TITLE_REST = 0.1  # Charcoal between the card and the first painting's own fade, as a share (at most 0.4 s).
 TITLE_BYLINE = 'Lord Byron'
-TITLE_FONT_FILE = Path(__file__).resolve().parent.parent / 'style-guide/fonts/Italianno-Regular.ttf'
-TITLE_FONT_SHA256 = 'f6ae96dea0da46c73370eb0575848ab0eda190315bdfda3f5b252bba3dc9173c'
-TITLE_WEIGHT = 0.022  # Outline as a share of the letter size: the approved "larger + bolder" handwriting.
+# Opening card in EB Garamond (SIL OFL, bundled and fingerprinted): italic title, byline in spaced capitals.
+TITLE_FONTS = {  # name: (file, sha256, weight on the variable 'wght' axis)
+    'italic': ('EBGaramond-Italic-wght.ttf', 'bba2c4499c93c9612b90b9825d32b07da52fce2fe57562a1eb6b833553f93c4e', 400),
+    'roman': ('EBGaramond-wght.ttf', 'ef9512f92f6d579e5dc75af59a5a4b1b8b47d2eda89e00b954d44520e5369027', 450),
+}
+TITLE_FONT_DIR = Path(__file__).resolve().parent.parent / 'style-guide/fonts'
 COVER_LOSS = 0.06  # A painting may fill the frame edge to edge only if that hides at most 6% of it.
 CAPTION_TOP = 0.80  # Short (landscape) paintings sit above this line, leaving the captions their own space.
 TWO_MOMENTS_SCENE = 24.0
@@ -374,36 +377,43 @@ def wrap_title(text, font, max_width, max_lines=3):
     lines.append(line)
     return lines if len(lines) <= max_lines and all(font.getlength(x) <= max_width for x in lines) else None
 
-def title_font(size):
-    """Italianno (SIL OFL, bundled and fingerprinted) for the handwritten opening card only."""
-    data = TITLE_FONT_FILE.read_bytes()
-    require(hashlib.sha256(data).hexdigest() == TITLE_FONT_SHA256, 'The title card font file changed.')
-    return ImageFont.truetype(io.BytesIO(data), size)
+def title_font(kind, size):
+    """EB Garamond for the opening card only: 'italic' (title) or 'roman' (byline capitals)."""
+    name, sha, weight = TITLE_FONTS[kind]
+    data = (TITLE_FONT_DIR / name).read_bytes()
+    require(hashlib.sha256(data).hexdigest() == sha, 'The title card font file changed.')
+    font = ImageFont.truetype(io.BytesIO(data), size)
+    font.set_variation_by_axes([weight])
+    return font
+
+def spaced_capitals(text):
+    """'Lord Byron' -> 'L O R D   B Y R O N': the classic book-title byline."""
+    return '   '.join(' '.join(word.upper()) for word in text.split())
 
 def title_card(width, height, title, byline, style):
-    """Charcoal card: the story title handwritten in parchment, a short gold rule, the byline handwritten in gold.
-    Never narrated. Italianno has one weight, so a same-colour outline (TITLE_WEIGHT of the size) makes it bolder."""
+    """Charcoal card: the story title in EB Garamond italic (parchment), a short gold rule, and the byline in
+    spaced EB Garamond capitals (gold). Never narrated."""
     card = Image.new('RGB', (width, height), _colour(style, 'charcoal'))
     draw = ImageDraw.Draw(card)
     parchment, gold = _colour(style, 'parchment'), _colour(style, 'gold')
-    safe = round(width * 0.86)
-    for fraction in (0.095, 0.085, 0.075, 0.065, 0.055, 0.047, 0.04):  # Long titles step down in size rather than overflow.
-        font = title_font(round(height * fraction))
-        lines = wrap_title(title, font, safe)
+    safe = round(width * 0.84)
+    for fraction in (0.072, 0.064, 0.056, 0.049, 0.043, 0.038, 0.034):  # Long titles step down in size rather than overflow.
+        font = title_font('italic', round(height * fraction))
+        lines = wrap_title(title, font, safe, max_lines=4)
         if lines:
             break
     require(lines is not None, 'The story title is too long for the opening card.')
-    byline_font = title_font(round(height * 0.052))
-    line_height, gap = font.size, round(height * 0.016)
-    y = height / 2 - line_height * len(lines) / 2 - byline_font.size * 0.4
+    byline_text = spaced_capitals(byline)
+    byline_font = title_font('roman', round(height * 0.026))
+    require(byline_font.getlength(byline_text) <= safe, 'The byline is too long for the opening card.')
+    line_height, gap = round(font.size * 1.12), round(height * 0.018)
+    y = height / 2 - line_height * len(lines) / 2 - byline_font.size * 0.5
     for line in lines:
-        draw.text((width / 2, y + line_height / 2), line, fill=parchment, font=font, anchor='mm',
-                  stroke_width=max(1, round(font.size * TITLE_WEIGHT)), stroke_fill=parchment)
+        draw.text((width / 2, y + line_height / 2), line, fill=parchment, font=font, anchor='mm')
         y += line_height
     rule_y = y + gap
     draw.line((width / 2 - width * 0.07, rule_y, width / 2 + width * 0.07, rule_y), fill=gold, width=max(1, round(height / 640)))
-    draw.text((width / 2, rule_y + gap + byline_font.size / 2), byline, fill=gold, font=byline_font, anchor='mm',
-              stroke_width=max(1, round(byline_font.size * TITLE_WEIGHT)), stroke_fill=gold)
+    draw.text((width / 2, rule_y + gap + byline_font.size / 2), byline_text, fill=gold, font=byline_font, anchor='mm')
     return card
 
 def title_level(t, length):

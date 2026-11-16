@@ -22,9 +22,9 @@ authoritative license texts. This notice does not relicense the user's applicati
   matter from redistribution of the encoder.
 - The bundled, fingerprinted **DejaVu Sans** font has its complete upstream
   Bitstream Vera/DejaVu terms in `style-guide/fonts/LICENSE-DejaVu.txt`.
-- The bundled, fingerprinted **Italianno** font (opening title card only) is
-  Copyright 2009 The Italianno Project Authors, under the SIL Open Font License 1.1
-  in `style-guide/fonts/LICENSE-Italianno-OFL.txt`.
+- The bundled, fingerprinted **EB Garamond** fonts (opening title card only) are
+  Copyright 2017 The EB Garamond Project Authors, under the SIL Open Font License 1.1
+  in `style-guide/fonts/LICENSE-EBGaramond-OFL.txt`.
 
 The website's Playfair Display and Cormorant Garamond names are suggested brand
 continuity only; the local UI does not fetch external font files. The video caption

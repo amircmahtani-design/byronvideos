@@ -163,6 +163,13 @@ class TitleCardChecks(unittest.TestCase):
                 self.assertEqual(card.getpixel((0, 0)), (0x14, 0x14, 0x16))  # Charcoal edges; text stays inside the safe width.
                 self.assertEqual(card.crop((0, 0, 60, 1920)).getextrema(), ((0x14, 0x14), (0x14, 0x14), (0x16, 0x16)))
 
+    def test_card_uses_the_bundled_garamond_with_a_spaced_capitals_byline(self):
+        from byron_video.lean_composition import spaced_capitals, title_font
+        self.assertEqual(spaced_capitals('Lord Byron'), 'L O R D   B Y R O N')
+        italic, roman = title_font('italic', 100), title_font('roman', 50)
+        self.assertEqual((italic.getname()[0], roman.getname()[0]), ('EB Garamond', 'EB Garamond'))
+        self.assertIn('Italic', italic.getname()[1])
+
     def test_card_fades_in_holds_and_rests_on_charcoal_before_the_story(self):
         self.assertEqual(TITLE_SECONDS, 2.0)  # Default length.
         for length in (1, 2, 3, 4, 5):
