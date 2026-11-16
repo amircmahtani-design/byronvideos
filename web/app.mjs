@@ -7,6 +7,7 @@ const $ = id => document.getElementById(id);
 const ui = Object.fromEntries(['exact-actions','exact-note','approve-film','renew-preview','renew-clean','clean-download','check-exact','voice','refresh-voices','voice-status','creator','inputs','script','script-count','images','paintings','empty-images','convert','connection','reconnect','error','job','job-title','job-message','job-note','progress','download','new-film','resume','resume-film','prototype-title','prototype-copy','studio-status','retry-upload','script-skips','title-seconds','stop-film','check','check-heading','check-title','check-start','check-end','check-meta','check-go','check-edit','setup-reminder','setup-reminder-title','setup-reminder-text'].map(id => [id, $(id)]));
 let paintings = [];
 let checked = false; // The owner confirmed the "check this is the right story" panel for exactly these inputs.
+let downloading = false; // A download was just started from this page.
 let ready = false;
 let activeJob = null;
 let busy = false;
@@ -214,7 +215,7 @@ async function pollJob() {
   const id = activeJob;
   eligibleResumeAttempt=null; ui['resume-film'].hidden=true;
   pollController = new AbortController();
-  ui.resume.hidden = true; ui['stop-film'].hidden = true;
+  ui.resume.hidden = true;
   try {
     const response = await timedFetch(`/api/jobs/${id}`, {cache: 'no-store', signal: pollController.signal});
     if (hostedJob && [401, 403].includes(response.status)) { askToSignIn(id); return; }
@@ -227,6 +228,8 @@ async function pollJob() {
       try { sessionStorage.removeItem('byron-worker-resume'); } catch { /* A stale marker stays safely blocked after reload. */ }
       resumePending = null;
     }
+    // Set from the film's state only (not hidden-then-shown each check), so the page below never jumps.
+    ui['stop-film'].hidden = !(hostedJob && ['queued','running','rendering','processing'].includes(job.status));
     eligibleResumeAttempt = job.status === 'HOLD' && job.can_resume === true && Number.isInteger(job.resume_attempt) && job.resume_attempt < 3 ? job.resume_attempt + 1 : null;
     ui['resume-film'].hidden = !hostedJob || eligibleResumeAttempt === null || !!resumePending;
     ui['resume-film'].disabled = resumeWorking;
@@ -251,7 +254,6 @@ async function pollJob() {
     } else if (['failed','error','cancelled'].includes(job.status)) failedJob(typeof job.message === 'string' ? job.message : 'The renderer reported an error.');
     else if (['queued','running','rendering','processing'].includes(job.status)) {
       ui['job-title'].textContent = job.status === 'queued' ? 'Your film is in the queue' : 'Making your film';
-      ui['stop-film'].hidden = !hostedJob;
       timer = setTimeout(pollJob, 2000);
     } else throw new Error('The renderer returned an unfamiliar status. Check film status again; no new job will be started.');
   } catch (error) {
@@ -303,7 +305,17 @@ ui.download.addEventListener('click', async event => {
     const response = await timedFetch(`/api/jobs/${id}`, {cache: 'no-store'}, 15000);
     if ([401, 403].includes(response.status)) { askToSignIn(id); return; }
   } catch { /* Let the download itself report a network problem. */ }
+  if (downloading) return; // A film is large; one tap is enough, repeat taps would fetch extra copies.
+  downloading = true;
+  const label = ui.download.innerHTML, note = ui['job-note'].textContent;
+  ui.download.textContent = 'Downloading… please wait'; ui.download.setAttribute('aria-disabled', 'true'); ui.download.classList.add('working');
+  ui['job-note'].textContent = 'Your film is downloading. It is a large file (often 50–100 MB), so it can take a minute. ' +
+    'On an iPad or iPhone it appears in the Files app, under Downloads. Please tap Download only once.';
   location.assign(ui.download.href);
+  setTimeout(() => {
+    downloading = false; ui.download.innerHTML = label; ui.download.removeAttribute('aria-disabled'); ui.download.classList.remove('working');
+    ui['job-note'].textContent = note + ' If the download did not arrive, tap Download MP4 again.';
+  }, 90000);
 });
 ui.resume.addEventListener('click', async () => {
   if (signInNeeded) { if (activeJob) saveActiveJob(activeJob); location.assign('/auth/login'); return; }
