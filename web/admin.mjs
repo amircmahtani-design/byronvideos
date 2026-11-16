@@ -34,13 +34,22 @@ async function check() {
     if (loginRequired) document.getElementById('admin-recheck').textContent = 'Sign in';
   }
 }
+// The sign-in behind this page changes over time (hour-long Google session, then the remembered-device pass),
+// each with its own security token: read the current one just before every change. A plain read; nothing is sent.
+async function freshCsrf() {
+  const data = await request('/api/admin/status');
+  if (typeof data.csrf_token !== 'string' || data.csrf_token.length < 32) throw new Error();
+  csrf = data.csrf_token;
+  return csrf;
+}
 async function submit(path, body, input, success) {
   if (!csrf || working) return null;
   working = true; fields.disabled = true; result.textContent = 'Saving or checking privately…';
   const encoded = body ? JSON.stringify(body) : undefined;
   if (input) input.value = '';
   try {
-    const data = await request(path, {method: 'POST', headers: {'Content-Type':'application/json', 'X-CSRF-Token':csrf}, body:encoded});
+    const token = await freshCsrf();
+    const data = await request(path, {method: 'POST', headers: {'Content-Type':'application/json', 'X-CSRF-Token':token}, body:encoded});
     result.textContent = success + ' Film generation is still not activated.';
     return data;
   } catch { result.textContent = 'Could not confirm this action. Check administrator access, connection and key permissions, then try again. No media was generated.'; return null; }
@@ -96,8 +105,9 @@ async function voiceChange(path, body, inputs, success) {
   if (!csrf || working) return;
   working = true; fields.disabled = true; result.textContent = 'Saving…';
   try {
+    const token = await freshCsrf().catch(() => { throw new Error('Your sign-in has ended. Press Sign in, then try again; nothing was changed.'); });
     const response = await fetch(path, {method: 'POST', credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(20000),
-      headers: {'Content-Type':'application/json', 'X-CSRF-Token':csrf}, body: body ? JSON.stringify(body) : undefined});
+      headers: {'Content-Type':'application/json', 'X-CSRF-Token':token}, body: body ? JSON.stringify(body) : undefined});
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : 'Could not save this change. Please try again.');
     for (const input of inputs || []) input.value = '';
