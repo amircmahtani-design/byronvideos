@@ -251,7 +251,11 @@ async function pollJob() {
       ui['job-note'].textContent = completedFilmNote(job);
       // Keep the form locked until the operator chooses to make another film.
       if (isPrivateDraft(job)) await refreshExactFilm(id);
-      else { saveActiveJob(null); activeJob = null; if (hostedJob) saveFinished(id); }
+      else {
+        saveActiveJob(null); activeJob = null; if (hostedJob) saveFinished(id);
+        // iPad/iPhone: load the finished film straight away, so the button is simply "Save to Photos".
+        if (hostedJob && canShareFilms() && !(preparedFilm && preparedFilm.id === id) && !downloading) prepareFilm(id);
+      }
     } else if (['failed','error','cancelled'].includes(job.status)) failedJob(typeof job.message === 'string' ? job.message : 'The renderer reported an error.');
     else if (['queued','running','rendering','processing'].includes(job.status)) {
       ui['job-title'].textContent = job.status === 'queued' ? 'Your film is in the queue' : 'Making your film';
@@ -305,8 +309,8 @@ function canShareFilms() {
 async function prepareFilm(id) {
   downloading = true;
   const note = ui['job-note'].textContent;
-  ui.download.textContent = 'Preparing your film…'; ui.download.setAttribute('aria-disabled', 'true'); ui.download.classList.add('working');
-  ui['job-note'].textContent = 'Loading your film onto this device. It is a large file (often 50–100 MB), so it can take a minute. Keep this page open.';
+  ui.download.textContent = 'Getting your film ready…'; ui.download.setAttribute('aria-disabled', 'true'); ui.download.classList.add('working');
+  ui['job-note'].textContent = 'Loading your film onto this iPad so it can go into Photos. It is a large file, so it can take a minute. Keep this page open.';
   try {
     const response = await fetch(ui.download.href, {credentials: 'same-origin', cache: 'no-store'});
     if ([401, 403].includes(response.status)) { askToSignIn(id); return; }
@@ -316,15 +320,14 @@ async function prepareFilm(id) {
       const {done, value} = await reader.read();
       if (done) break;
       parts.push(value); received += value.length;
-      ui.download.textContent = `Preparing your film… ${Math.round(received / 1048576)} MB`;
+      ui.download.textContent = `Getting your film ready… ${Math.round(received / 1048576)} MB`;
     }
     preparedFilm = {id, file: new File(parts, ui.download.download || 'byron-film.mp4', {type: 'video/mp4'})};
-    ui.download.innerHTML = 'Save film to Photos <span aria-hidden="true">↓</span>';
-    ui['job-note'].textContent = 'Your film is ready on this device. Tap Save film to Photos, then choose Save Video. ' +
-      'It goes into your Photos, ready for YouTube, and you come straight back here.';
+    ui.download.innerHTML = 'Save to Photos <span aria-hidden="true">↓</span>';
+    ui['job-note'].textContent = 'Tap Save to Photos, then tap Save Video. Your film goes into Photos, ready for YouTube, and you come straight back here.';
   } catch {
-    ui.download.innerHTML = 'Download MP4 <span aria-hidden="true">↓</span>';
-    ui['job-note'].textContent = note + ' The film could not be loaded just now. Check the connection and tap Download MP4 again.';
+    ui.download.innerHTML = 'Save to Photos <span aria-hidden="true">↓</span>';
+    ui['job-note'].textContent = note + ' The film could not be loaded just now. Check the connection, then tap Save to Photos to try again.';
   } finally {
     downloading = false; ui.download.removeAttribute('aria-disabled'); ui.download.classList.remove('working');
   }
@@ -332,9 +335,9 @@ async function prepareFilm(id) {
 async function saveFilm() {
   try {
     await navigator.share({files: [preparedFilm.file], title: 'Byron film'});
-    ui['job-note'].textContent = 'Saved. You can find the film in Photos (or wherever you chose). Tap Save film to Photos again for another copy.';
+    ui['job-note'].textContent = 'Done. If you tapped Save Video, the film is now in Photos, ready for YouTube.';
   } catch (error) {
-    if (error?.name !== 'AbortError') ui['job-note'].textContent = 'The film could not be shared just now. Tap Save film to Photos to try again.';
+    if (error?.name !== 'AbortError') ui['job-note'].textContent = 'The film could not be saved just now. Tap Save to Photos to try again.';
   }
 }
 ui.download.addEventListener('click', async event => {
@@ -350,7 +353,7 @@ ui.download.addEventListener('click', async event => {
   // iPad and iPhone: a downloaded file opens in a full-screen viewer with no way back to the studio (home-screen
   // shortcuts have no back button). Instead, load the film here, then hand it to the iPad's own Share sheet
   // (Save Video → Photos), which always closes back to this page. The Share sheet needs a fresh tap, and a large
-  // film takes longer to load than that tap lasts, hence two taps: Download, then Save film to Photos.
+  // film takes longer to load than that tap lasts, so the film is loaded as soon as it is finished (or on this tap).
   if (preparedFilm && preparedFilm.id === id) { await saveFilm(); return; }
   if (canShareFilms()) { await prepareFilm(id); return; }
   downloading = true;
