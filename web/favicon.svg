@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <title>Byron Films</title>
+  <rect width="64" height="64" rx="14" fill="#141416"/>
+  <g transform="rotate(-14 13 25)">
+    <rect x="10" y="15" width="44" height="10" rx="2" fill="#C8A96A"/>
+    <path d="M17 15h6l-5 10h-6zM29 15h6l-5 10h-6zM41 15h6l-5 10h-6z" fill="#141416"/>
+  </g>
+  <rect x="10" y="28" width="44" height="26" rx="3" fill="#C8A96A"/>
+  <rect x="10" y="28" width="44" height="7" fill="#5B0E14"/>
+  <path d="M17 28h6l-4 7h-6zM29 28h6l-4 7h-6zM41 28h6l-4 7h-6z" fill="#C8A96A"/>
+</svg>

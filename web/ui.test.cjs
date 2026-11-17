@@ -12,7 +12,7 @@ const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR
   const server = http.createServer(async(req,res) => {
     try {
       const name = req.url === '/' ? 'index.html' : req.url.slice(1);
-      if (!['index.html','styles.css','app.mjs','core.mjs'].includes(name)) {res.writeHead(404);res.end();return;}
+      if (!['index.html','styles.css','app.mjs','core.mjs','hosted.mjs'].includes(name)) {res.writeHead(404);res.end();return;}
       res.setHeader('Content-Type',types[path.extname(name)]);res.end(await fs.readFile(path.join(root,name)));
     } catch {res.writeHead(500);res.end();}
   });

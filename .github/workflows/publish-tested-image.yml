@@ -1,0 +1,98 @@
+name: Publish the tested runtime image to the private registry (owner-approved)
+# For each push to the candidate branch: wait for the pinned runtime workflow to
+# build and fully test that exact commit, fetch the image it exported, check the
+# recorded hashes, and push it to the single byron-studio registry using a
+# short-lived GitHub OIDC token. Never builds; no keys, no deploy, no other access.
+on:
+  push:
+    branches: [candidate/private-studio-v9-20261027]
+permissions:
+  contents: read
+  actions: read
+  id-token: write
+concurrency:
+  group: publish-tested-image-${{ github.sha }}
+  cancel-in-progress: false
+env:
+  REGISTRY_HOST: europe-west1-docker.pkg.dev
+  IMAGE: europe-west1-docker.pkg.dev/badmad-dangerous/byron-studio/byron-studio
+  WIF_AUDIENCE: //iam.googleapis.com/projects/285750040978/locations/global/workloadIdentityPools/byron-github/providers/byronvideos
+jobs:
+  publish:
+    if: github.repository == 'amircmahtani-design/byronvideos'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 110
+    steps:
+      - name: Wait for the passing runtime run of this exact commit and download its image
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import hashlib,json,os,pathlib,time,urllib.request
+          api='https://api.github.com/repos/'+os.environ['GITHUB_REPOSITORY'];sha=os.environ['GITHUB_SHA']
+          def get(url,raw=False):
+              # Unredirected: the token must not follow the artifact redirect to blob storage.
+              req=urllib.request.Request(url,headers={'Accept':'application/vnd.github+json'})
+              req.add_unredirected_header('Authorization','Bearer '+os.environ['GH_TOKEN'])
+              with urllib.request.urlopen(req,timeout=120) as r:return r.read() if raw else json.load(r)
+          deadline=time.time()+100*60;run=None
+          while time.time()<deadline:
+              runs=[r for r in get(api+'/actions/workflows/resolve-hosted-runtime.yml/runs?event=pull_request&head_sha='+sha)['workflow_runs'] if r['head_sha']==sha]
+              done=[r for r in runs if r['status']=='completed']
+              if done:
+                  run=max(done,key=lambda r:r['run_attempt']);break
+              print('Waiting for runtime build/test of',sha,'(',len(runs),'run(s) found )',flush=True);time.sleep(60)
+          assert run,'No completed runtime run for this commit'
+          assert run['conclusion']=='success','Runtime run did not pass: '+str(run['conclusion'])+' '+run['html_url']
+          arts=[a for a in get(run['url']+'/artifacts')['artifacts'] if a['name']=='public-tested-runtime-image' and not a['expired']]
+          assert len(arts)==1,'Exactly one tested image artifact required'
+          art=arts[0];assert art['digest'].startswith('sha256:')
+          work=pathlib.Path(os.environ['RUNNER_TEMP'])/'transfer';work.mkdir()
+          data=get(art['archive_download_url'],raw=True)
+          assert hashlib.sha256(data).hexdigest()==art['digest'][7:],'Artifact digest mismatch'
+          (work/'artifact.zip').write_bytes(data)
+          print('Tested image artifact',art['id'],art['digest'],'from',run['html_url'])
+          with open(os.environ['GITHUB_ENV'],'a') as f:f.write('TRANSFER='+str(work/'out')+'\n')
+          PY
+          cd "$RUNNER_TEMP/transfer"
+          test "$(unzip -Z1 artifact.zip | sort | tr '\n' ' ')" = 'image.tar.gz transfer.json '
+          unzip -q artifact.zip -d out
+      - name: Verify transfer metadata, load image and check identity
+        run: |
+          python3 - <<'PY'
+          import hashlib,json,os,pathlib,subprocess
+          root=pathlib.Path(os.environ['TRANSFER']);meta=json.loads((root/'transfer.json').read_text())
+          assert meta['head_commit']==os.environ['GITHUB_SHA'],'Artifact is not from this commit'
+          assert meta['contains_private_configuration'] is False and meta['provider_calls']==0
+          archive=root/meta['archive_file'];assert archive.name=='image.tar.gz'
+          assert archive.stat().st_size==meta['archive_bytes']<=1024**3
+          sha=hashlib.sha256()
+          with archive.open('rb') as f:
+              while chunk:=f.read(1024*1024):sha.update(chunk)
+          assert sha.hexdigest()==meta['archive_sha256'],'Archive hash mismatch'
+          subprocess.run(['docker','load','-i',str(archive)],check=True)
+          info=json.loads(subprocess.check_output(['docker','image','inspect',meta['image_id']]))[0]
+          assert info['Id']==meta['image_id'] and info['Size']<=5*1024**3
+          assert info['Os']=='linux' and info['Architecture']=='amd64' and info['Config']['User']=='65532:65532'
+          with open(os.environ['GITHUB_ENV'],'a') as f:f.write('IMAGE_ID='+meta['image_id']+'\n')
+          print('Verified image',meta['image_id'],info['Size'],'bytes for',meta['head_commit'])
+          PY
+      - name: Exchange GitHub OIDC token for a short-lived Google token
+        run: |
+          set -euo pipefail
+          aud=$(python3 -c 'import os,urllib.parse;print(urllib.parse.quote("https:"+os.environ["WIF_AUDIENCE"],safe=""))')
+          oidc=$(curl -fsSL -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$aud" | python3 -c 'import json,sys;print(json.load(sys.stdin)["value"])')
+          body=$(OIDC="$oidc" python3 -c 'import json,os;print(json.dumps({"grantType":"urn:ietf:params:oauth:grant-type:token-exchange","audience":os.environ["WIF_AUDIENCE"],"scope":"https://www.googleapis.com/auth/cloud-platform","requestedTokenType":"urn:ietf:params:oauth:token-type:access_token","subjectTokenType":"urn:ietf:params:oauth:token-type:jwt","subjectToken":os.environ["OIDC"]}))')
+          token=$(curl -fsSL -X POST https://sts.googleapis.com/v1/token -H 'Content-Type: application/json' -d "$body" \
+            | python3 -c 'import json,sys;print(json.load(sys.stdin)["access_token"])')
+          echo "::add-mask::$token"
+          printf '%s' "$token" | docker login -u oauth2accesstoken --password-stdin "https://$REGISTRY_HOST"
+      - name: Push the verified image and record the registry digest
+        run: |
+          set -euo pipefail
+          docker tag "$IMAGE_ID" "$IMAGE:$GITHUB_SHA"
+          docker push "$IMAGE:$GITHUB_SHA"
+          digest=$(docker image inspect "$IMAGE:$GITHUB_SHA" --format '{{range .RepoDigests}}{{println .}}{{end}}' | grep "^$IMAGE@sha256:")
+          echo "Registry image: $digest" | tee -a "$GITHUB_STEP_SUMMARY"
+          docker logout "$REGISTRY_HOST"

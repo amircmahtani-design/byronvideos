@@ -1,0 +1,4 @@
+# Preserve exact-byte style and motion locks on every checkout.
+* text=auto eol=lf
+*.png binary
+*.ttf binary
