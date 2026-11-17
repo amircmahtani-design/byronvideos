@@ -12,7 +12,7 @@ from pathlib import Path
 import re
 import tempfile
 import wave
-from .elevenlabs_adapter import MAX_AUDIO_BYTES, fingerprint, plan_requests, require, validate_profile
+from .elevenlabs_adapter import MAX_AUDIO_BYTES, ending_roles, fingerprint, plan_requests, require, validate_profile
 from .narration_media import RATE, MAX_SECONDS, run, wav_info, loudness_json
 from .provider_execution import load_recorded_narration
 from .cloud_journal import MAX_ALLOCATIONS
@@ -38,10 +38,24 @@ def soften_edges(pcm):
     return samples.tobytes()
 
 
+ENDING_GAP = 0.8      # Before the final sentence: closer than a paragraph break, so it follows on.
+CLOSING_JOIN = 0.06   # Between the final sentence and its closing words, recorded separately: read as one.
+
+
 def pause_after(chunk, last, pacing):
     if last or pacing != 'sentences':
         return 0
     return round(RATE * (PARAGRAPH_PAUSE if '\n' in chunk[len(chunk.rstrip()):] else SENTENCE_PAUSE))
+
+
+def ending_pause(chunk, index, count, pacing, roles):
+    """pause_after, adjusted around the storyteller ending (index is 0-based)."""
+    pause = pause_after(chunk, index == count - 1, pacing)
+    if roles and index == roles['final'] - 1:
+        return min(pause, round(RATE * ENDING_GAP))
+    if roles and roles['closing'] is not None and index == roles['closing'] - 1:
+        return round(RATE * CLOSING_JOIN)
+    return pause
 
 
 def build_narration_candidate(*, owner_id, job_id, text, profile, approval, journal, response_store,
@@ -79,6 +93,7 @@ def build_narration_candidate(*, owner_id, job_id, text, profile, approval, jour
     version = run(['ffmpeg', '-version']).stdout.decode().splitlines()[0].split()[2]
     require(version == expected_ffmpeg_version, 'FFmpeg runtime differs from the recorded draft.')
     words, total_frames, cursor, text, parts = [], 0, 0, '', []
+    roles = ending_roles(planned_text, profile)
     request_ids = set()
     with tempfile.TemporaryDirectory(prefix='narration-', dir=root) as scratch:
         temp = Path(scratch)
@@ -122,7 +137,7 @@ def build_narration_candidate(*, owner_id, job_id, text, profile, approval, jour
                               'char_start':ca+cursor, 'char_end':cb+cursor})
                 previous, last_char = b, cb
             require(response['words'] and not chunk[last_char:].strip(), 'Word timings omit source wording.')
-            pause = pause_after(chunk, index == len(requests), profile.get('pacing'))
+            pause = ending_pause(chunk, index - 1, len(requests), profile.get('pacing'), roles)
             # A recording far shorter than its text suggests the voice skipped words (seen live in one long request).
             spoken = len(re.sub(r'\s+', '', chunk))
             parts.append({'request_sha256': request['sha256'], 'request_id': response['request_id'],

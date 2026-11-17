@@ -1,8 +1,9 @@
 """Storyteller pacing: one request per sentence or line, exact text, pauses only in 'sentences' mode."""
 import unittest
 
-from byron_video.elevenlabs_adapter import plan_requests, sentence_spans, validate_profile
-from byron_video.elevenlabs_release import PARAGRAPH_PAUSE, SENTENCE_PAUSE, SKIP_SECONDS_PER_CHAR, pause_after
+from byron_video.elevenlabs_adapter import ENDING_SPEED, closing_cut, ending_roles, plan_requests, sentence_spans, validate_profile
+from byron_video.elevenlabs_release import (CLOSING_JOIN, ENDING_GAP, PARAGRAPH_PAUSE, SENTENCE_PAUSE, SKIP_SECONDS_PER_CHAR,
+                                            ending_pause, pause_after)
 from byron_video.narration_media import RATE
 from test_provider_execution_stdlib import profile
 
@@ -50,6 +51,56 @@ class PacingChecks(unittest.TestCase):
         self.assertEqual(pause_after('Then he left!', True, 'sentences'), 0)
         self.assertEqual(pause_after('A sentence. ', False, None), 0)
         self.assertLess(SKIP_SECONDS_PER_CHAR, 0.07)  # Well below calm narration, so normal sentences are never flagged.
+
+    def test_final_sentence_is_slower_and_its_closing_words_are_recorded_on_their_own(self):
+        story = ('Three days later, her telephone rang.\n\n'
+                 'For the first time in her life, Leila answered without waiting to see if it would ring again.')
+        paced = {**profile(), 'pacing': 'sentences'}
+        requests = plan_requests(story, paced)
+        self.assertEqual([r['body']['text'] for r in requests], [
+            'Three days later, her telephone rang.\n\n',
+            'For the first time in her life, Leila answered without waiting to see ',
+            'if it would ring again.'])
+        self.assertEqual(''.join(r['body']['text'] for r in requests), story)  # Exact text, nothing rewritten.
+        normal = paced['voice_settings']
+        self.assertEqual(requests[0]['body']['voice_settings'], normal)
+        for r in requests[1:]:  # Same voice; only the speed of the final sentence changes.
+            self.assertEqual(r['body']['voice_settings'], {**normal, 'speed': ENDING_SPEED})
+        self.assertEqual(requests[1]['body']['next_text'], 'if it would ring again.')
+        self.assertNotIn('next_text', requests[2]['body'])
+        self.assertEqual(ending_roles(story, paced), {'final': 1, 'closing': 2})
+        self.assertEqual(len(plan_requests(story, profile())), 1)  # Without pacing: unchanged single request.
+        self.assertIsNone(ending_roles(story, profile()))
+
+    def test_closing_words_split_only_at_a_natural_break(self):
+        self.assertEqual(closing_cut('For the first time in her life, Leila answered without waiting to see if it would ring again.'),
+                         len('For the first time in her life, Leila answered without waiting to see '))
+        self.assertIsNone(closing_cut('Then he left!'))  # Too short to split.
+        self.assertIsNone(closing_cut('Seven long years passed slowly over the quiet grey northern town.'))  # No break.
+        cut = closing_cut('She closed the old blue door behind her, quietly and for good.')
+        self.assertEqual('She closed the old blue door behind her, quietly and for good.'[cut:], 'quietly and for good.')
+
+    def test_short_final_sentence_is_slowed_but_not_split(self):
+        requests = plan_requests(STORY, {**profile(), 'pacing': 'sentences'})
+        self.assertEqual(len(requests), 6); self.assertEqual(requests[-1]['body']['text'], 'Then he left!')
+        self.assertEqual(requests[-1]['body']['voice_settings']['speed'], ENDING_SPEED)
+        self.assertEqual(requests[-2]['body']['voice_settings']['speed'], profile()['voice_settings']['speed'])
+
+    def test_ending_pauses(self):
+        roles = {'final': 1, 'closing': 2}
+        self.assertEqual(ending_pause('Three days later, her telephone rang.\n\n', 0, 3, 'sentences', roles), round(RATE * ENDING_GAP))
+        self.assertEqual(ending_pause('For the first time ... to see ', 1, 3, 'sentences', roles), round(RATE * CLOSING_JOIN))
+        self.assertEqual(ending_pause('if it would ring again.', 2, 3, 'sentences', roles), 0)
+        self.assertEqual(ending_pause('A sentence. ', 0, 3, 'sentences', roles), round(RATE * SENTENCE_PAUSE))  # Never longer.
+        self.assertLess(ENDING_GAP, PARAGRAPH_PAUSE)
+
+    def test_grouped_long_story_still_gets_its_own_ending(self):
+        story = ' '.join(f'Line {i} ends.' for i in range(1500)) + ' She left the room, and the door closed behind her.'
+        requests = plan_requests(story, {**profile(), 'pacing': 'sentences'})
+        self.assertEqual(''.join(r['body']['text'] for r in requests), story)
+        self.assertEqual(requests[-2]['body']['text'], 'She left the room, ')
+        self.assertEqual(requests[-1]['body']['text'], 'and the door closed behind her.')
+        self.assertLessEqual(len(requests), 402)
 
     def test_joins_are_softened_without_changing_length(self):
         from array import array

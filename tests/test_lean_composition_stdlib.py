@@ -11,7 +11,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from byron_video.lean_composition import (DEPTH, FADE, ONE_PASS_SCENE, RAMP, TITLE_REST, TITLE_SECONDS, TURN, TWO_MOMENTS_SCENE,
+from byron_video.lean_composition import (DEPTH, FADE, TAIL, ONE_PASS_SCENE, RAMP, TITLE_REST, TITLE_SECONDS, TURN, TWO_MOMENTS_SCENE,
                                           align_still, camera, drift_at, frame_difference, scene_plan, state_at, still_frame,
                                           still_windows, title_card, title_level)
 
@@ -226,7 +226,7 @@ class LeanRenderChecks(unittest.TestCase):
                                               check=True, capture_output=True).stdout)
             video = next(s for s in probe['streams'] if s['codec_type'] == 'video')
             self.assertEqual((video['width'], video['height']), (1080, 1920))
-            self.assertTrue(math.isclose(manifest['duration_seconds'], duration + 2.0))  # Last painting lingers 2 s after the voice.
+            self.assertTrue(math.isclose(manifest['duration_seconds'], duration + TAIL))  # Last painting lingers TAIL s after the voice.
             self.assertTrue(math.isclose(manifest['voice_seconds'], duration))
             audio_stream = next(s for s in probe['streams'] if s['codec_type'] == 'audio')
             self.assertGreater(float(audio_stream['duration']), duration + 1.8)  # Silence padded, not cut at the last word.
@@ -243,13 +243,13 @@ class LeanRenderChecks(unittest.TestCase):
             # A title with length 0 means no card at all.
             none = compose_film(root=root, narration_wav=audio, report=report, timing=timing, scenes=scenes,
                                 output=root / 'none' / 'film.mp4', join_threshold=5, title='A Harbour at Dawn', title_seconds=0)
-            self.assertIsNone(none['title_card']); self.assertTrue(math.isclose(none['duration_seconds'], duration + 2.0))
+            self.assertIsNone(none['title_card']); self.assertTrue(math.isclose(none['duration_seconds'], duration + TAIL))
 
             # With a title: a silent card first (default 2 s), then the same film shifted later by TITLE_SECONDS.
             titled = compose_film(root=root, narration_wav=audio, report=report, timing=timing, scenes=scenes,
                                   output=root / 'titled' / 'film.mp4', join_threshold=5, title='A Harbour at Dawn')
             self.assertEqual(titled['title_card'], {'title': 'A Harbour at Dawn', 'byline': 'Lord Byron', 'seconds': TITLE_SECONDS})
-            self.assertTrue(math.isclose(titled['duration_seconds'], TITLE_SECONDS + duration + 2.0))
+            self.assertTrue(math.isclose(titled['duration_seconds'], TITLE_SECONDS + duration + TAIL))
             srt = (root / 'titled' / 'film.srt').read_text(encoding='utf-8')
             first = re.search(r'(\d\d):(\d\d):(\d\d),(\d{3}) -->', srt).groups()
             self.assertAlmostEqual(int(first[2]) + int(first[3]) / 1000, TITLE_SECONDS + words[0]['start'], places=2)

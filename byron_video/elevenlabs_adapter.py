@@ -34,6 +34,13 @@ PACING = ('sentences',)
 SENTENCE_END = re.compile(r'[.!?…]+["\'”’)\]]*(?=\s|$)')
 MAX_PACED_REQUESTS = 400  # Leaves room for the paintings within the ledger's 480 operations per film.
 ABBREVIATIONS = {'mr', 'mrs', 'ms', 'dr', 'st', 'mt', 'jr', 'sr', 'prof', 'rev', 'col', 'gen', 'capt', 'lt', 'vs', 'etc', 'no'}
+# Storyteller ending (sentence pacing only), chosen by ear with the owner: the final sentence is read slower in
+# the same voice (only speed changes), and its closing words are recorded on their own so the voice lands them
+# as the end of the story instead of carrying on.
+ENDING_SPEED = 0.75
+CLOSING_MIN_WORDS, CLOSING_MAX_WORDS = 3, 7  # Closing words split off a final sentence of at least 8 words.
+CLOSING_STARTERS = {'if', 'when', 'whether', 'until', 'till', 'before', 'after', 'while', 'as', 'because', 'though',
+                    'although', 'and', 'but', 'or', 'so', 'that', 'where', 'which', 'who', 'unless', 'since', 'once'}
 
 
 def validate_profile(profile):
@@ -67,6 +74,9 @@ def plan_requests(text, profile):
     p = validate_profile(profile)
     limit = MODEL_LIMITS[p['model_id']]
     spans, start = ([], 0) if p.get('pacing') != 'sentences' else (sentence_spans(text, limit), len(text))
+    ending = None
+    if p.get('pacing') == 'sentences':
+        spans, ending = ending_spans(text, spans)
     while start < len(text):
         end = min(start + limit, len(text))
         if end < len(text):
@@ -79,7 +89,10 @@ def plan_requests(text, profile):
     requests = []
     for i, span in enumerate(spans):
         require(bool(span['text'].strip()), 'Formatting creates an all-whitespace provider span; adjust whitespace before any provider calls. Nothing was cut.')
-        body = {'text': span['text'], 'model_id': p['model_id'], 'voice_settings': p['voice_settings'],
+        settings = p['voice_settings']
+        if ending and i >= ending['final']:  # The final sentence: same voice, slower.
+            settings = {**settings, 'speed': min(settings['speed'], ENDING_SPEED)}
+        body = {'text': span['text'], 'model_id': p['model_id'], 'voice_settings': settings,
                 'seed': p['seed'], 'apply_text_normalization': 'off', 'apply_language_text_normalization': False}
         # Context is source text, not another requested narration or a prompt. Sentence pacing gives each
         # sentence the surrounding story so its tone carries on naturally instead of restarting.
@@ -97,8 +110,8 @@ def plan_requests(text, profile):
     return requests
 
 
-def sentence_spans(text, limit):
-    """Contiguous spans, one per sentence (or line), each keeping its trailing whitespace."""
+def sentence_cuts(text):
+    """Positions where a sentence or line ends (after its trailing whitespace)."""
     cuts = set()
     for match in SENTENCE_END.finditer(text):
         word = re.search(r'([A-Za-z]+)\W*$', text[max(0, match.start() - 24):match.start() + 1])  # Local look-back only.
@@ -106,6 +119,60 @@ def sentence_spans(text, limit):
             continue  # "Mr. Mehra" is one sentence.
         cuts.add(re.match(r'\s*', text[match.end():]).end() + match.end())
     cuts |= {m.end() for m in re.finditer(r'\n\s*', text)}  # A line break always ends a spoken unit.
+    return cuts
+
+
+def closing_cut(sentence):
+    """Offset where a final sentence's closing words begin, or None to read it whole.
+
+    The closing words are the last 3-7 words, starting at the earliest joining word ("if", "when", "and"...)
+    or right after a comma/semicolon/colon/dash in that window. Without such a natural break the sentence
+    is never split mid-phrase.
+    """
+    words = list(re.finditer(r'\S+', sentence))
+    if len(words) < CLOSING_MIN_WORDS + 5:
+        return None
+    for j in range(len(words) - CLOSING_MAX_WORDS, len(words) - CLOSING_MIN_WORDS + 1):
+        word = re.sub(r'^\W+|\W+$', '', words[j].group()).lower()
+        if word in CLOSING_STARTERS or re.search(r'[,;:–—]$', words[j - 1].group()):
+            return words[j].start()
+    return None
+
+
+def ending_spans(text, spans):
+    """Give the final sentence its own spans: (spans, {'final': index of its first span, 'closing': index or None}).
+
+    Exact text is kept: spans stay contiguous and cover the story unchanged.
+    """
+    if not spans:
+        return spans, None
+    last = spans[-1]
+    inside = [c for c in sentence_cuts(text) if last['char_start'] < c < last['char_end']]
+    start = max(inside) if inside else last['char_start']  # A grouped last span: split off its final sentence.
+    if not re.search(r'\w', text[start:last['char_end']]):
+        return spans, None
+    head = spans[:-1] + ([{'char_start': last['char_start'], 'char_end': start, 'text': text[last['char_start']:start]}]
+                         if start > last['char_start'] else [])
+    final, cut = len(head), closing_cut(text[start:last['char_end']])
+    if cut is None:
+        tail = [{'char_start': start, 'char_end': last['char_end'], 'text': text[start:last['char_end']]}]
+    else:
+        tail = [{'char_start': start, 'char_end': start + cut, 'text': text[start:start + cut]},
+                {'char_start': start + cut, 'char_end': last['char_end'], 'text': text[start + cut:last['char_end']]}]
+    return head + tail, {'final': final, 'closing': final + 1 if cut is not None else None}
+
+
+def ending_roles(text, profile):
+    """The ending plan of plan_requests for this exact text/profile, by request index (0-based), or None."""
+    p = validate_profile(profile)
+    if p.get('pacing') != 'sentences':
+        return None
+    return ending_spans(text, sentence_spans(text, MODEL_LIMITS[p['model_id']]))[1]
+
+
+def sentence_spans(text, limit):
+    """Contiguous spans, one per sentence (or line), each keeping its trailing whitespace."""
+    cuts = sentence_cuts(text)
     spans, start = [], 0
     for end in sorted(c for c in cuts if 0 < c < len(text)) + [len(text)]:
         if end > start and text[start:end].strip():
