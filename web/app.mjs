@@ -8,6 +8,7 @@ const ui = Object.fromEntries(['exact-actions','exact-note','approve-film','rene
 let paintings = [];
 let checked = false; // The owner confirmed the "check this is the right story" panel for exactly these inputs.
 let downloading = false; // A download was just started from this page.
+let preparedFilm = null; // {id, file}: a finished film loaded on this device, ready for the Share sheet.
 let ready = false;
 let activeJob = null;
 let busy = false;
@@ -296,6 +297,46 @@ ui.images.addEventListener('change', () => {
   paintings.push(...files.map(file => ({file, url: URL.createObjectURL(file)}))); showPaintings(); showError();
 });
 ui.reconnect.addEventListener('click', () => { if (loginRequired) location.assign('/auth/login'); else checkRenderer(); });
+function canShareFilms() {
+  if (!(navigator.maxTouchPoints > 1)) return false; // Computers keep the ordinary download.
+  try { return !!(navigator.canShare && navigator.canShare({files: [new File([new Blob()], 'byron-film.mp4', {type: 'video/mp4'})]})); }
+  catch { return false; }
+}
+async function prepareFilm(id) {
+  downloading = true;
+  const note = ui['job-note'].textContent;
+  ui.download.textContent = 'Preparing your film…'; ui.download.setAttribute('aria-disabled', 'true'); ui.download.classList.add('working');
+  ui['job-note'].textContent = 'Loading your film onto this device. It is a large file (often 50–100 MB), so it can take a minute. Keep this page open.';
+  try {
+    const response = await fetch(ui.download.href, {credentials: 'same-origin', cache: 'no-store'});
+    if ([401, 403].includes(response.status)) { askToSignIn(id); return; }
+    if (!response.ok || !response.body) throw new Error();
+    const reader = response.body.getReader(), parts = []; let received = 0;
+    for (;;) {
+      const {done, value} = await reader.read();
+      if (done) break;
+      parts.push(value); received += value.length;
+      ui.download.textContent = `Preparing your film… ${Math.round(received / 1048576)} MB`;
+    }
+    preparedFilm = {id, file: new File(parts, ui.download.download || 'byron-film.mp4', {type: 'video/mp4'})};
+    ui.download.innerHTML = 'Save film to Photos <span aria-hidden="true">↓</span>';
+    ui['job-note'].textContent = 'Your film is ready on this device. Tap Save film to Photos, then choose Save Video. ' +
+      'It goes into your Photos, ready for YouTube, and you come straight back here.';
+  } catch {
+    ui.download.innerHTML = 'Download MP4 <span aria-hidden="true">↓</span>';
+    ui['job-note'].textContent = note + ' The film could not be loaded just now. Check the connection and tap Download MP4 again.';
+  } finally {
+    downloading = false; ui.download.removeAttribute('aria-disabled'); ui.download.classList.remove('working');
+  }
+}
+async function saveFilm() {
+  try {
+    await navigator.share({files: [preparedFilm.file], title: 'Byron film'});
+    ui['job-note'].textContent = 'Saved. You can find the film in Photos (or wherever you chose). Tap Save film to Photos again for another copy.';
+  } catch (error) {
+    if (error?.name !== 'AbortError') ui['job-note'].textContent = 'The film could not be shared just now. Tap Save film to Photos to try again.';
+  }
+}
 ui.download.addEventListener('click', async event => {
   // The link needs a live sign-in; check first so an expired one leads to Sign in, not a failed download.
   const id = loadFinished();
@@ -306,13 +347,18 @@ ui.download.addEventListener('click', async event => {
     if ([401, 403].includes(response.status)) { askToSignIn(id); return; }
   } catch { /* Let the download itself report a network problem. */ }
   if (downloading) return; // A film is large; one tap is enough, repeat taps would fetch extra copies.
+  // iPad and iPhone: a downloaded file opens in a full-screen viewer with no way back to the studio (home-screen
+  // shortcuts have no back button). Instead, load the film here, then hand it to the iPad's own Share sheet
+  // (Save Video → Photos), which always closes back to this page. The Share sheet needs a fresh tap, and a large
+  // film takes longer to load than that tap lasts, hence two taps: Download, then Save film to Photos.
+  if (preparedFilm && preparedFilm.id === id) { await saveFilm(); return; }
+  if (canShareFilms()) { await prepareFilm(id); return; }
   downloading = true;
   const label = ui.download.innerHTML, note = ui['job-note'].textContent;
   ui.download.textContent = 'Downloading… please wait'; ui.download.setAttribute('aria-disabled', 'true'); ui.download.classList.add('working');
   ui['job-note'].textContent = 'Your film is downloading. It is a large file (often 50–100 MB), so it can take a minute. ' +
-    'If the iPad asks, tap Download; you stay on this page. The film appears in the Files app, under Downloads. Please tap Download only once.';
-  // Download in place: a same-origin link with a download name saves the file without leaving this page, so the
-  // studio stays on screen (navigating to the file left iPad home-screen shortcuts with no way back).
+    'If the browser asks, choose Download; you stay on this page. Please tap Download only once.';
+  // Computers: a same-origin link with a download name saves the file without leaving this page.
   const link = document.createElement('a');
   link.href = ui.download.href; link.download = ui.download.download || 'byron-film.mp4'; link.hidden = true;
   document.body.append(link); link.click(); link.remove();
@@ -468,6 +514,7 @@ ui['retry-upload'].addEventListener('click', () => {
 });
 ui['new-film'].addEventListener('click', () => {
   if(exactPending || exactWorking)return;
+  preparedFilm = null; // Free the loaded film; the next one is prepared fresh.
   clearTimeout(exactTimer);exactStatus=null;ui['exact-actions'].hidden=true;
   stopPolling(); activeJob = null; saveActiveJob(null); saveFinished(null); signInNeeded = false; ui.resume.textContent = 'Check film status';
   setBusy(false); ui.job.hidden = true; ui.download.removeAttribute('href'); showError(); ui.script.focus(); checkRenderer();
