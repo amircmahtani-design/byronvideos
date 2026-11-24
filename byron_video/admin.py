@@ -38,7 +38,7 @@ class NamedVoiceInput(VoiceInput):
 
 def install_admin_routes(app, *, session_resolver=None, private_store=None,
                          connection_tester=None, voice_provider=None, voice_library=None, voice_namer=None, key_records=None,
-                         allowed_origin=None, activated=False, native_api_mode="vertex_eu", balance_reader=None):
+                         allowed_origin=None, activated=False, native_api_mode="vertex_eu"):
     """Explicit mounting only. Activation requires separate deployment approval.
 
     session_resolver must verify a real session AND the configured administrator
@@ -46,7 +46,6 @@ def install_admin_routes(app, *, session_resolver=None, private_store=None,
     must be cryptographically random, session-bound and rotated with sessions.
     private_store must scope configuration to this app and encrypt it at rest.
     Test callbacks must use only reviewed read-only endpoints, never synthesis.
-    balance_reader (optional) reads provider balances with separate billing-only keys.
     """
     if native_api_mode not in {"vertex_eu", "gemini_developer"}:
         raise ValueError("Explicit supported native API mode required.")
@@ -72,15 +71,6 @@ def install_admin_routes(app, *, session_resolver=None, private_store=None,
                          not secrets.compare_digest(token, session.csrf_token)):
             raise HTTPException(403, "Reload this administrator page before trying again.")
         return session
-
-    def same_page(request, session):
-        # A read that makes outbound provider calls: require the session CSRF token and refuse
-        # cross-site requests, even though it changes nothing.
-        token = request.headers.get("x-csrf-token", "")
-        origin = request.headers.get("origin")
-        if (request.headers.get("sec-fetch-site") == "cross-site" or (origin is not None and origin != allowed_origin)
-                or not token.isascii() or not secrets.compare_digest(token, session.csrf_token)):
-            raise HTTPException(403, "Reload this administrator page before trying again.")
 
     def provider_name(provider):
         if provider not in providers:
@@ -206,17 +196,3 @@ def install_admin_routes(app, *, session_resolver=None, private_store=None,
     async def default_named_voice(body: VoiceInput, request: Request):
         await authorize(request, True)
         return await library_call("set_default", body.voice_id)
-
-    @app.get("/api/admin/balances")
-    async def provider_balances(request: Request):
-        session = await authorize(request)
-        same_page(request, session)
-        if balance_reader is None:
-            raise HTTPException(503, "Provider balances are not connected in this studio mode.")
-        try:
-            result = await invoke(balance_reader)
-            if not isinstance(result, dict) or set(result) != {"elevenlabs", "fal", "checked_at"}:
-                raise ValueError()
-        except Exception:
-            raise HTTPException(503, "Provider balances could not be read. Nothing was changed.") from None
-        return result

@@ -4,10 +4,12 @@ POST /api/uploads (multipart `images`, Idempotency-Key) → {upload_id, images:[
 POST /api/jobs   JSON {script, images, voice_id, title_seconds} + Idempotency-Key → {id, status}
 POST /api/jobs/{id}/stop → the film ends now and the studio is free for the next one
 GET  /api/jobs/{id}, /api/jobs/{id}/video, /api/submissions/{key}, /api/creator-capabilities
+GET  /api/studio/remaining (owner session + CSRF token) → what is left: spending limit, ElevenLabs, fal
 Mutations require the owner session, exact Origin and session CSRF token (as admin.py).
 """
 from dataclasses import asdict
 import re
+import secrets
 import time
 
 from fastapi import Header, HTTPException, Request
@@ -35,7 +37,7 @@ class LeanSubmission(Submission):
 
 
 def install_lean_routes(app, *, access, owner_id, config, settings, jobs, ledger_factory, budget_reader, uploads,
-                        objects, library, starter, check, release_sha256, setup_expires_at=None):
+                        objects, library, starter, check, release_sha256, setup_expires_at=None, balance_reader=None):
     """Mount before the static web assets. Every dependency is explicitly injected."""
     require(callable(check) and callable(starter) and callable(ledger_factory) and callable(budget_reader)
             and isinstance(release_sha256, str) and re.fullmatch(r'[0-9a-f]{64}', release_sha256), 'Explicit lean adapters required.')
@@ -85,6 +87,37 @@ def install_lean_routes(app, *, access, owner_id, config, settings, jobs, ledger
                     live_release=True, synthetic_fixture=False, runtime_release_sha256=release_sha256,
                     lean_generation=True, administration_only=False,
                     setup_expires_at=setup_expires_at)  # The page reminds the owner to renew before this.
+
+    @app.get('/api/studio/remaining')
+    async def remaining(request: Request):
+        """Owner-only read: what is left of the studio spending limit, ElevenLabs credits and the fal balance.
+
+        A GET that makes outbound provider calls, so it also requires the session CSRF token and refuses
+        cross-site requests. Each row has its own state; one failing never fails the others.
+        """
+        session = await owner(request)
+        token = request.headers.get('x-csrf-token', '')
+        origin = request.headers.get('origin')
+        if (request.headers.get('sec-fetch-site') == 'cross-site' or (origin is not None and origin != config['identity']['origin'])
+                or not token.isascii() or not secrets.compare_digest(token, session.csrf_token)):
+            raise HTTPException(403, 'Reload the studio page before trying again.')
+        total = budget['approved_total_cap_cents']
+        try:
+            left = await run_in_threadpool(budget_reader)
+            require(type(left) is int and 0 <= left <= total, 'Budget record needs review.')
+            studio = {'state': 'available', 'left_cents': left, 'total_cents': total}
+        except Exception:
+            studio = {'state': 'unavailable', 'total_cents': total}
+        from .provider_balances import not_set_up, unavailable
+        providers = {'elevenlabs': not_set_up(), 'fal': not_set_up(), 'checked_at': int(time.time())}
+        if balance_reader is not None:
+            try:
+                result = await invoke(balance_reader)
+                require(isinstance(result, dict) and set(result) == {'elevenlabs', 'fal', 'checked_at'}, 'Unexpected balances.')
+                providers = result
+            except Exception:
+                providers = {'elevenlabs': unavailable(), 'fal': unavailable(), 'checked_at': int(time.time())}
+        return {'studio': studio, **providers}
 
     @app.post('/api/uploads', status_code=201)
     async def upload(request: Request):
@@ -268,6 +301,7 @@ def install_lean_generation(app, *, parts, bindings, settings, transaction_runne
     from .hosted_control import Principal
     from .hosted_uploads import CreatorAccess, CreatorSession
     from .lean_film import LeanBudget, LeanJobStore, LeanLedger, LeanObjects, LeanStarter, owner_for
+    from .provider_balances import ProviderBalances, billing_resources
     from .worker_binding import HttpxCloudRunTransport
     config = parts.config; target = config['target']
     owner_id = owner_for(config)
@@ -284,4 +318,6 @@ def install_lean_generation(app, *, parts, bindings, settings, transaction_runne
         uploads=CloudUploadStore(bindings.storage_client, bucket=target['bucket']),
         objects=LeanObjects(bindings.storage_client, bucket=target['bucket']), library=parts.library,
         starter=LeanStarter(target, HttpxCloudRunTransport(bindings.workload_token_reader)),
-        check=parts.check, release_sha256=parts.release_sha256, setup_expires_at=getattr(parts, 'setup_expires_at', None))
+        check=parts.check, release_sha256=parts.release_sha256, setup_expires_at=getattr(parts, 'setup_expires_at', None),
+        # Separate billing-only keys; their names derive from the signed secret names, so the signed config is unchanged.
+        balance_reader=ProviderBalances(bindings.secret_client, billing_resources(config['secret_resources'])))

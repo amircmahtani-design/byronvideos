@@ -302,26 +302,23 @@ test('optional Gemini admin field stays hidden unless authenticated selected mod
   }
 });
 
-test('provider balances panel shows each provider on its own and never fails the page', async () => {
-  const {readFile}=await import('node:fs/promises'); const {runInNewContext}=await import('node:vm');
-  const source=await readFile(new URL('./admin.mjs',import.meta.url),'utf8');
-  const cases=[
-    [{elevenlabs:{state:'available',credits_used:20058,credits_limit:121855,credits_remaining:101797,resets_at:1795996800,plan:'creator'},fal:{state:'no_permission'},checked_at:1795900000},
-     /^101,797 credits left of 121,855 \(20,058 used, Creator plan, renews \d{1,2} \w{3} 2026\)\.$/, /lacks billing permission/],
-    [{elevenlabs:{state:'not_set_up'},fal:{state:'available',balance:42.5,currency:'USD'},checked_at:1795900000}, /^Not set up yet/, /^US\$42\.50 balance\.$/],
-    [{elevenlabs:{state:'available',credits_used:'x'},fal:{state:'weird'},checked_at:1}, /^Not available right now/, /^Not available right now/],
-  ];
-  for(const [payload,elevenlabs,fal] of cases){
-    const elements=new Map(); const handlers={}; const calls=[];
-    const el=id=>{if(!elements.has(id))elements.set(id,{value:'',hidden:true,disabled:id!=='balance-refresh',textContent:'',addEventListener:(event,fn)=>handlers[id+':'+event]=fn});return elements.get(id);};
-    runInNewContext(source,{document:{getElementById:el,querySelectorAll:()=>[]},window:{addEventListener:()=>{}},location:{assign:()=>{}},AbortSignal:{timeout:()=>undefined},
-      fetch:async(path,options)=>{calls.push([path,options]);return {ok:true,status:200,json:async()=>path==='/api/admin/balances'?payload:({enabled:true,csrf_token:'x'.repeat(40),native_api_mode:'vertex_eu'})};}});
-    for(let i=0;i<5;i++) await new Promise(resolve=>setImmediate(resolve));
-    const balanceCall=calls.find(([path])=>path==='/api/admin/balances');
-    assert.equal(balanceCall[1].headers['X-CSRF-Token'],'x'.repeat(40));
-    assert.equal(balanceCall[1].method,undefined);
-    assert.match(el('balance-elevenlabs').textContent,elevenlabs);
-    assert.match(el('balance-fal').textContent,fal);
-    assert.equal(el('balance-refresh').disabled,false);
-  }
+test("what's left: each row stands alone and odd values read as not available", async () => {
+  const {describeRemaining}=await import('./core.mjs');
+  const today=describeRemaining({studio:{state:'available',left_cents:10000,total_cents:10000},
+    elevenlabs:{state:'available',credits_used:20058,credits_limit:121855,credits_remaining:101797,resets_at:1796011200,plan:'creator'},
+    fal:{state:'available',balance:57.48,currency:'USD'},checked_at:1795900000});
+  assert.equal(today.studio,'$100.00 left of $100.00');
+  assert.match(today.elevenlabs,/^101,797 credits left of 121,855, renews \d{1,2} \w{3} 2026$/);
+  assert.equal(today.fal,'$57.48 left');
+  assert.match(today.checked,/^Checked /);
+  const missing=describeRemaining({studio:{state:'unavailable',total_cents:10000},elevenlabs:{state:'not_set_up'},fal:{state:'no_permission'}});
+  assert.match(missing.studio,/^Not available right now/);
+  assert.match(missing.elevenlabs,/^Not set up yet/);
+  assert.match(missing.fal,/lacks billing permission/);
+  assert.equal(missing.checked,'');
+  const odd=describeRemaining({studio:{state:'available',left_cents:20000,total_cents:10000},elevenlabs:{state:'available',credits_remaining:'x'},fal:{state:'weird'}});
+  for(const row of [odd.studio,odd.elevenlabs,odd.fal]) assert.match(row,/^Not available right now/);
+  assert.deepEqual(Object.keys(describeRemaining(null)),['studio','elevenlabs','fal','checked']);
+  const html=await (await import('node:fs/promises')).readFile(new URL('./index.html',import.meta.url),'utf8');
+  assert.match(html,/<details id="remaining" class="card remaining" hidden>/); // Hidden unless the owner's live studio is connected.
 });

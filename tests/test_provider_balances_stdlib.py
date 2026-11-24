@@ -2,14 +2,8 @@ import json
 from types import SimpleNamespace
 
 import pytest
-from fastapi.testclient import TestClient
-
-from byron_video.admin import AdminSession, install_admin_routes
-from byron_video.hosted_control import create_app
 from byron_video.provider_balances import ProviderBalances, billing_resources
 
-ORIGIN = 'https://studio.example'
-TOKEN = 'synthetic-csrf-fixture-' + 'x' * 32
 EL_KEY = 'synthetic-elevenlabs-billing-key'
 FAL_KEY = 'synthetic-fal-billing-key'
 SIGNED = {'elevenlabs': 'projects/p1/secrets/byron-elevenlabs', 'fal': 'projects/p1/secrets/byron-fal',
@@ -89,8 +83,9 @@ def test_balances_read_with_billing_keys_only():
         'fal': {'state': 'available', 'balance': 42.52, 'currency': 'USD'},
         'checked_at': 1_764_000_000}
     assert all(name.endswith('-billing/versions/latest') for name in secrets.names)
-    assert http.calls[0] == (EL, {'xi-api-key': EL_KEY, 'Accept': 'application/json'})
-    assert http.calls[1] == (FAL + '?expand=credits', {'Authorization': 'Key ' + FAL_KEY, 'Accept': 'application/json'})
+    assert sorted(http.calls, key=lambda call: call[0]) == [
+        (EL, {'xi-api-key': EL_KEY, 'Accept': 'application/json'}),
+        (FAL + '?expand=credits', {'Authorization': 'Key ' + FAL_KEY, 'Accept': 'application/json'})]
     assert EL_KEY not in repr(balances)
 
 
@@ -110,38 +105,3 @@ def test_missing_key_lacking_permission_and_errors_are_states_not_failures():
         assert 'permission' in result['fal']['message'] if expected == 'no_permission' else True
         text = json.dumps(result)
         assert EL_KEY not in text and FAL_KEY not in text and 'user_read' not in text and 'boom' not in text
-
-
-def app(balance_reader, activated=True, session_resolver=None):
-    value = create_app()
-    install_admin_routes(value, private_store=object(), allowed_origin=ORIGIN, activated=activated,
-                         session_resolver=session_resolver or (lambda request: AdminSession('owner_fixture', TOKEN)),
-                         balance_reader=balance_reader)
-    return value
-
-
-def test_endpoint_is_owner_only_csrf_checked_and_redacted():
-    calls = []
-    def read():
-        calls.append(1)
-        return {'elevenlabs': {'state': 'not_set_up', 'message': 'x'}, 'fal': {'state': 'not_set_up', 'message': 'x'}, 'checked_at': 1}
-    with TestClient(app(read, session_resolver=lambda request: None)) as client:
-        assert client.get('/api/admin/balances', headers={'X-CSRF-Token': TOKEN}).status_code == 403
-    with TestClient(app(read, activated=False)) as client:
-        assert client.get('/api/admin/balances', headers={'X-CSRF-Token': TOKEN}).status_code == 503
-    with TestClient(app(read)) as client:
-        for h in [{}, {'X-CSRF-Token': 'wrong'}, {'X-CSRF-Token': TOKEN, 'Sec-Fetch-Site': 'cross-site'},
-                  {'X-CSRF-Token': TOKEN, 'Origin': 'https://attacker.example'}]:
-            assert client.get('/api/admin/balances', headers=h).status_code == 403
-        assert calls == []
-        response = client.get('/api/admin/balances', headers={'X-CSRF-Token': TOKEN, 'Origin': ORIGIN})
-        assert response.status_code == 200 and response.json()['fal']['state'] == 'not_set_up'
-        assert response.headers['cache-control'] == 'no-store'
-        assert client.post('/api/admin/balances', headers={'X-CSRF-Token': TOKEN, 'Origin': ORIGIN}).status_code == 405
-    with TestClient(app(None)) as client:
-        assert client.get('/api/admin/balances', headers={'X-CSRF-Token': TOKEN}).status_code == 503
-    def fail():
-        raise RuntimeError(EL_KEY)
-    with TestClient(app(fail)) as client:
-        response = client.get('/api/admin/balances', headers={'X-CSRF-Token': TOKEN})
-        assert response.status_code == 503 and EL_KEY not in response.text

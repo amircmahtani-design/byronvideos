@@ -39,6 +39,14 @@ def _state(state):
     return {'state': state, 'message': MESSAGES[state]}
 
 
+def not_set_up():
+    return _state('not_set_up')
+
+
+def unavailable():
+    return _state('unavailable')
+
+
 def _number(value):
     return type(value) in (int, float) and value == value and abs(value) < 1e12
 
@@ -128,4 +136,7 @@ class ProviderBalances:
         return self._get(FAL_URL, {'Authorization': 'Key ' + key}, parse_fal)
 
     def __call__(self):
-        return {'elevenlabs': self.elevenlabs(), 'fal': self.fal(), 'checked_at': int(self._clock())}
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=2) as pool:  # Both providers at once; each call is bounded.
+            elevenlabs, fal = pool.submit(self.elevenlabs), pool.submit(self.fal)
+            return {'elevenlabs': elevenlabs.result(), 'fal': fal.result(), 'checked_at': int(self._clock())}

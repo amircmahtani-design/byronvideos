@@ -106,14 +106,8 @@ def assemble_administration(*, config, processing_plan, bindings, acceptance, re
     # No provider callbacks, including voice lookup: names are typed as shown in ElevenLabs.
     from .key_records import FirestoreKeyRecords
     records = FirestoreKeyRecords(bindings.firestore_client, project_id=target['project_id'], namespace=db['namespace'])
-    # Read-only balances only where provider calls already happen (the lean studio, not setup-only mode).
-    # Separate billing-only keys; names derive from the signed secret names, so the signed config is unchanged.
-    balances = None
-    if generation is not None:
-        from .provider_balances import ProviderBalances, billing_resources
-        balances = ProviderBalances(bindings.secret_client, billing_resources(config['secret_resources']))
     install_admin_routes(app, session_resolver=admin_session, private_store=secrets, voice_library=library,
-        key_records=records, allowed_origin=auth['origin'], activated=True, native_api_mode=mode, balance_reader=balances)
+        key_records=records, allowed_origin=auth['origin'], activated=True, native_api_mode=mode)
     if generation is None:
         @app.get('/api/creator-capabilities')
         def capabilities():

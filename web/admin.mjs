@@ -19,42 +19,7 @@ async function request(path, options = {}) {
 }
 async function check() {
   if (working) return;
-  fields.disabled = true; csrf = null; loginRequired = false; setDeveloperMode(false); // Provider balances: a read-only check with separate billing keys. Each provider shows its own state.
-const balanceText = {
-  not_set_up: 'Not set up yet. Add a billing key to see this here.',
-  no_permission: 'Not available. The billing key lacks billing permission.',
-  unavailable: 'Not available right now. Try again in a moment.',
-};
-const count = n => Number(n).toLocaleString('en-GB');
-const dayFirst = s => new Date(s * 1000).toLocaleDateString('en-GB', {day: 'numeric', month: 'short', year: 'numeric'});
-function describeBalance(provider, info) {
-  if (!info || typeof info !== 'object') return balanceText.unavailable;
-  if (info.state !== 'available') return balanceText[info.state] || balanceText.unavailable;
-  if (provider === 'elevenlabs') {
-    if (![info.credits_used, info.credits_limit, info.credits_remaining].every(Number.isFinite)) return balanceText.unavailable;
-    const plan = typeof info.plan === 'string' && info.plan ? `, ${info.plan.charAt(0).toUpperCase()}${info.plan.slice(1)} plan` : '';
-    const renews = Number.isFinite(info.resets_at) ? `, renews ${dayFirst(info.resets_at)}` : '';
-    return `${count(info.credits_remaining)} credits left of ${count(info.credits_limit)} (${count(info.credits_used)} used${plan}${renews}).`;
-  }
-  if (!Number.isFinite(info.balance)) return balanceText.unavailable;
-  const currency = typeof info.currency === 'string' && /^[A-Z]{3}$/.test(info.currency) ? info.currency : 'USD';
-  return `${info.balance.toLocaleString('en-GB', {style: 'currency', currency})} balance.`;
-}
-async function loadBalances() {
-  const button = document.getElementById('balance-refresh'), checked = document.getElementById('balance-checked');
-  if (!csrf || button.disabled) return;
-  button.disabled = true; checked.textContent = 'Checking balances…';
-  try {
-    const token = await freshCsrf();
-    const data = await request('/api/admin/balances', {headers: {'X-CSRF-Token': token}});
-    for (const provider of ['elevenlabs', 'fal']) document.getElementById(`balance-${provider}`).textContent = describeBalance(provider, data[provider]);
-    checked.textContent = Number.isFinite(data.checked_at)
-      ? `Checked ${new Date(data.checked_at * 1000).toLocaleString('en-GB', {day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit'})}.` : '';
-  } catch { checked.textContent = 'Balances could not be checked just now. Nothing was changed.'; }
-  finally { button.disabled = false; }
-}
-document.getElementById('balance-refresh').addEventListener('click', loadBalances);
-document.getElementById('admin-recheck').textContent = 'Check connection';
+  fields.disabled = true; csrf = null; loginRequired = false; setDeveloperMode(false); document.getElementById('admin-recheck').textContent = 'Check connection';
   try {
     const data = await request('/api/admin/status');
     if (data.enabled !== true || typeof data.csrf_token !== 'string' || data.csrf_token.length < 32) throw new Error();
@@ -63,7 +28,7 @@ document.getElementById('admin-recheck').textContent = 'Check connection';
     csrf = data.csrf_token; fields.disabled = false;
     status.textContent = 'Administrator connected. Film generation is not activated.';
     for (const [provider, info] of Object.entries(data.saved_keys || {})) showSaved(provider, info);
-    loadVoices(); loadBalances();
+    loadVoices();
   } catch {
     status.textContent = loginRequired ? 'Sign in with the permitted administrator account. Do not paste keys until connected.' : 'Administrator setup is not connected yet. Do not paste keys here.';
     if (loginRequired) document.getElementById('admin-recheck').textContent = 'Sign in';

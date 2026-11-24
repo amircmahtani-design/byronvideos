@@ -54,6 +54,9 @@ class LeanRouteChecks(unittest.TestCase):
         self.client, self.config = Client(), lean_config()
         self.store = LeanJobStore(self.client, project_id=PROJECT, namespace=NS, transaction_runner=self.client.run)
         self.objects, self.started, self.subject, self.remaining = Objects(), [], OWNER, None
+        self.balances = lambda: {'elevenlabs': {'state': 'available', 'credits_used': 20058, 'credits_limit': 121855,
+            'credits_remaining': 101797, 'resets_at': 1764374400, 'plan': 'creator'},
+            'fal': {'state': 'no_permission', 'message': 'Not available.'}, 'checked_at': 1}
         budget = LeanBudget(self.client, project_id=PROJECT, namespace=NS, transaction_runner=self.client.run)
         def session(request):
             if self.subject is None: raise ValueError('no session')
@@ -66,8 +69,36 @@ class LeanRouteChecks(unittest.TestCase):
             budget_reader=lambda: budget.remaining_cents(self.config['budget']) if self.remaining is None else self.remaining,
             uploads=Uploads(), objects=self.objects, library=Library(),
             starter=lambda job_id: self.started.append(job_id) or 'projects/synthetic-project/locations/us-central1/operations/op_00000001',
-            check=lambda: True, release_sha256='e' * 64, setup_expires_at=1_826_000_000)
+            check=lambda: True, release_sha256='e' * 64, setup_expires_at=1_826_000_000, balance_reader=lambda: self.balances())
         self.http = TestClient(app, base_url=ORIGIN)
+
+    def test_remaining_is_owner_only_csrf_checked_and_each_row_stands_alone(self):
+        good = {'x-csrf-token': TOKEN}
+        total = self.config['budget']['approved_total_cap_cents']
+        value = self.http.get('/api/studio/remaining', headers=good).json()
+        self.assertEqual(value['studio'], {'state': 'available', 'left_cents': total - self.config['budget']['prior_spend_cents'], 'total_cents': total})
+        self.assertEqual(value['elevenlabs']['credits_remaining'], 101797)
+        self.assertEqual(value['fal']['state'], 'no_permission')
+        for headers in [{}, {'x-csrf-token': 'wrong'}, {**good, 'sec-fetch-site': 'cross-site'}, {**good, 'origin': 'https://attacker.example'}]:
+            self.assertEqual(self.http.get('/api/studio/remaining', headers=headers).status_code, 403)
+        self.assertEqual(self.http.get('/api/studio/remaining', headers={**good, 'origin': ORIGIN}).status_code, 200)
+        self.assertEqual(self.http.post('/api/studio/remaining', headers=GOOD).status_code, 405)
+        # Providers failing never hides the spending limit; a broken budget read never hides the providers.
+        def boom(): raise RuntimeError('synthetic-secret-never-shown')
+        self.balances = boom
+        value = self.http.get('/api/studio/remaining', headers=good)
+        self.assertEqual(value.status_code, 200); self.assertNotIn('synthetic-secret', value.text)
+        self.assertEqual((value.json()['studio']['state'], value.json()['elevenlabs']['state'], value.json()['fal']['state']),
+                         ('available', 'unavailable', 'unavailable'))
+        self.remaining = 'bad'
+        self.balances = lambda: {'elevenlabs': {'state': 'not_set_up'}, 'fal': {'state': 'not_set_up'}, 'checked_at': 1}
+        value = self.http.get('/api/studio/remaining', headers=good).json()
+        self.assertEqual(value['studio'], {'state': 'unavailable', 'total_cents': total})
+        self.assertEqual(value['fal']['state'], 'not_set_up')
+        self.subject = None
+        self.assertEqual(self.http.get('/api/studio/remaining', headers=good).status_code, 401)
+        self.subject = 'someone_else'
+        self.assertEqual(self.http.get('/api/studio/remaining', headers=good).status_code, 403)
 
     def test_capabilities_are_truthful_and_owner_only(self):
         value = self.http.get('/api/creator-capabilities').json()
@@ -193,6 +224,10 @@ class LeanAssemblyChecks(unittest.TestCase):
                 self.assertEqual(value['runtime_release_sha256'], digest(self.envelope))
                 self.assertEqual(http.post('/api/jobs', json=body(), headers={'idempotency-key': KEY}).status_code, 403)
                 self.assertEqual(http.get('/api/admin/status').status_code, 200)
+                # Billing keys not set up yet (secret reads refused): the spending limit still shows.
+                left = http.get('/api/studio/remaining', headers={'x-csrf-token': TOKEN}).json()
+                self.assertEqual(left['studio']['state'], 'available')
+                self.assertEqual((left['elevenlabs']['state'], left['fal']['state']), ('not_set_up', 'not_set_up'))
             self.assertEqual(http.get('/').status_code, 200)
 
     def test_lean_needs_its_signed_config_section(self):
