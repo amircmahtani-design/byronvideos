@@ -39,6 +39,8 @@ ABBREVIATIONS = {'mr', 'mrs', 'ms', 'dr', 'st', 'mt', 'jr', 'sr', 'prof', 'rev',
 # as the end of the story instead of carrying on.
 ENDING_SPEED = 0.75
 CLOSING_MIN_WORDS, CLOSING_MAX_WORDS = 3, 7  # Closing words split off a final sentence of at least 8 words.
+CLOSING_PRONOUNS = {'he', 'she', 'they', 'i', 'we', 'you', 'it'}  # Second choice: a new clause's subject.
+CLOSING_FALLBACK_WORDS = 4  # Last resort, so every long final sentence still lands its closing words.
 CLOSING_STARTERS = {'if', 'when', 'whether', 'until', 'till', 'before', 'after', 'while', 'as', 'because', 'though',
                     'although', 'and', 'but', 'or', 'so', 'that', 'where', 'which', 'who', 'unless', 'since', 'once'}
 
@@ -123,20 +125,25 @@ def sentence_cuts(text):
 
 
 def closing_cut(sentence):
-    """Offset where a final sentence's closing words begin, or None to read it whole.
+    """Offset where a final sentence's closing words begin, or None to read it whole (under 8 words).
 
-    The closing words are the last 3-7 words, starting at the earliest joining word ("if", "when", "and"...)
-    or right after a comma/semicolon/colon/dash in that window. Without such a natural break the sentence
-    is never split mid-phrase.
+    The closing words are the last 3-7 words. They start, in order of preference, at the earliest joining
+    word ("if", "when", "and"...) or right after a comma/semicolon/colon/dash in that window; else at the
+    earliest subject pronoun ("he", "she", "they"...); else they are simply the last 4 words, so every
+    film's final sentence lands its ending (chosen by ear with the owner).
     """
     words = list(re.finditer(r'\S+', sentence))
     if len(words) < CLOSING_MIN_WORDS + 5:
         return None
-    for j in range(len(words) - CLOSING_MAX_WORDS, len(words) - CLOSING_MIN_WORDS + 1):
-        word = re.sub(r'^\W+|\W+$', '', words[j].group()).lower()
-        if word in CLOSING_STARTERS or re.search(r'[,;:–—]$', words[j - 1].group()):
+    window = range(len(words) - CLOSING_MAX_WORDS, len(words) - CLOSING_MIN_WORDS + 1)
+    bare = [re.sub(r'^\W+|\W+$', '', w.group()).lower() for w in words]
+    for j in window:
+        if bare[j] in CLOSING_STARTERS or re.search(r'[,;:–—]$', words[j - 1].group()):
             return words[j].start()
-    return None
+    for j in window:
+        if bare[j] in CLOSING_PRONOUNS:
+            return words[j].start()
+    return words[len(words) - CLOSING_FALLBACK_WORDS].start()
 
 
 def ending_spans(text, spans):

@@ -76,7 +76,12 @@ class PacingChecks(unittest.TestCase):
         self.assertEqual(closing_cut('For the first time in her life, Leila answered without waiting to see if it would ring again.'),
                          len('For the first time in her life, Leila answered without waiting to see '))
         self.assertIsNone(closing_cut('Then he left!'))  # Too short to split.
-        self.assertIsNone(closing_cut('Seven long years passed slowly over the quiet grey northern town.'))  # No break.
+        # Live film, 24 Nov 2026: no joining word or comma, so a subject pronoun starts the closing words.
+        sentence = 'There was nobody to tell him he was being foolish.'
+        self.assertEqual(sentence[closing_cut(sentence):], 'he was being foolish.')
+        # No break at all: the last four words are still landed on their own.
+        sentence = 'Seven long years passed slowly over the quiet grey northern town.'
+        self.assertEqual(sentence[closing_cut(sentence):], 'quiet grey northern town.')
         cut = closing_cut('She closed the old blue door behind her, quietly and for good.')
         self.assertEqual('She closed the old blue door behind her, quietly and for good.'[cut:], 'quietly and for good.')
 
