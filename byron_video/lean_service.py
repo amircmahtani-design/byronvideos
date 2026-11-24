@@ -23,7 +23,7 @@ from .spoken_text import prepare_story
 from .hosted_control import (IdempotencyConflict, JOB_ID, SAFE_ID, PrivateControlMiddleware, Submission, VerifiedImage,
                              digest, invoke, require)
 from .hosted_uploads import KEY, MAX_IMAGE_BYTES, batch_fingerprint, prepare_image
-from .lean_film import LeanBudgetExceeded, LeanBusy, dollars, estimate_cents, freeze_inputs, narration_profile
+from .lean_film import LeanBudgetExceeded, LeanBusy, cost_split, dollars, estimate_cents, freeze_inputs, narration_profile, over_budget_message
 
 EXPIRED = 'The studio setup has expired. Ask the owner to renew it; nothing was started or charged.'
 
@@ -168,8 +168,7 @@ def install_lean_routes(app, *, access, owner_id, config, settings, jobs, ledger
         except Exception:
             raise HTTPException(503, 'The spending limit could not be checked. Nothing was started.') from None
         if estimate > remaining:
-            raise HTTPException(402, f'This film would cost up to {dollars(estimate)}, but only {dollars(max(0, remaining))} '
-                                     'of the approved budget is left. Nothing was started or charged.')
+            raise HTTPException(402, over_budget_message(estimate, remaining, cost_split(requests, len(images), settings)))
         build = lambda job_id: freeze_inputs(owner_id=owner_id, job_id=job_id, script=body.script, narrated_text=text, images=images,
             voice=voice, profile=profile, requests=requests, settings=settings, budget=budget, request_sha256=request_hash,
             title_seconds=body.title_seconds)

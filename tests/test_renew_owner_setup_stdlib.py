@@ -48,6 +48,28 @@ class RenewOwnerSetupChecks(unittest.TestCase):
         self.assertEqual(json.loads(text)['config'], json.loads(self.bundle.read_text(encoding='utf-8'))['config'])  # Config unchanged.
         self.assertNotIn('PRIVATE', text)
 
+    def test_spending_limit_is_removed_under_a_fresh_scope_and_passes_the_studio_check(self):
+        out = self.root / 'nolimit.json'
+        self.assertEqual(renew.main(['--bundle', str(self.bundle), '--private-key', str(self.write_key(self.private)),
+                                     '--out', str(out), '--remove-spending-limit']), 0)
+        checked = parse_bootstrap_bundle(out.read_text(encoding='utf-8'), self.key_sha, administration_only=True)
+        old = json.loads(self.bundle.read_text(encoding='utf-8'))['config']['budget']
+        new = checked['config']['budget']
+        self.assertEqual(new['approved_total_cap_cents'], renew.UNLIMITED_CENTS)
+        self.assertEqual(new['prior_spend_cents'], 0)
+        self.assertNotEqual(new['scope'], old['scope'])                       # A fresh record, never the old one.
+        self.assertEqual((new['job_cap_cents'], new['operation_cap_cents']), (old['job_cap_cents'], old['operation_cap_cents']))
+
+    def test_spending_limit_can_be_set_to_a_dollar_amount(self):
+        out = self.root / 'cap.json'
+        old = json.loads(self.bundle.read_text(encoding='utf-8'))['config']['budget']
+        dollars = max(100, old['job_cap_cents'] // 100 + 1)
+        self.assertEqual(renew.main(['--bundle', str(self.bundle), '--private-key', str(self.write_key(self.private)),
+                                     '--out', str(out), '--spending-limit', str(dollars)]), 0)
+        new = parse_bootstrap_bundle(out.read_text(encoding='utf-8'), self.key_sha, administration_only=True)['config']['budget']
+        self.assertEqual((new['approved_total_cap_cents'], new['prior_spend_cents']), (dollars * 100, 0))
+        self.assertNotEqual(new['scope'], old['scope'])
+
     def test_lost_key_is_replaced_by_a_new_one_that_the_studio_accepts_under_its_new_pin(self):
         key_file, out = self.root / 'keys' / 'new-owner.pem', self.root / 'renewed.json'
         self.assertEqual(renew.main(['--bundle', str(self.bundle), '--private-key', str(key_file), '--out', str(out), '--create-key']), 0)

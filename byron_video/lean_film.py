@@ -128,6 +128,22 @@ def motion_approval(job_id, request, settings, budget):
                          budget['job_cap_cents'], budget['operation_cap_cents'])
 
 
+def cost_split(requests, image_count, settings):
+    """(narration cents for ElevenLabs, moving-painting cents for fal)."""
+    return sum(narration_cents(r, settings) for r in requests), image_count * motion_cents(settings)
+
+
+def over_budget_message(total, remaining, split=None):
+    """Plain English: this is the studio's own spending limit, not a provider balance."""
+    parts = ''
+    if split:
+        parts = f' (narration by ElevenLabs about {dollars(split[0])}, moving paintings by fal about {dollars(split[1])})'
+    return (f'Studio spending limit reached: this film would cost up to {dollars(total)}{parts}, but only '
+            f'{dollars(max(0, remaining))} is left of the spending limit set for this studio. This is the studio\'s own '
+            'safety limit, not your ElevenLabs or fal balance; raising it is done in the studio setup. '
+            'Nothing was started or charged.')
+
+
 def estimate_cents(requests, image_count, settings, budget):
     """Upper-bound quote; refuses before any job, reservation or provider call."""
     narration = [narration_cents(r, settings) for r in requests]
@@ -391,8 +407,7 @@ class LeanLedger:
         except ValueError:
             total, remaining = sum(allocations.values()), self.remaining_cents()
             if total > remaining:
-                raise LeanBudgetExceeded(f'This film would cost up to {dollars(total)}, but only {dollars(max(0, remaining))} '
-                                         'of the approved budget is left. Nothing was started or charged.') from None
+                raise LeanBudgetExceeded(over_budget_message(total, remaining)) from None
             raise
 
     def operations(self, plan_id, plan_sha256, before_claim):
