@@ -108,6 +108,16 @@
         <button id="check-exact" type="button" class="quiet">Check this film status</button>
       </div></div>
     </section>
+    <details id="remaining" class="card remaining" hidden>
+      <summary><span class="remaining-title">What&#8217;s left</span><span class="remaining-hint">Spending limit, ElevenLabs and fal</span></summary>
+      <dl class="check-list" aria-live="polite">
+        <dt>Studio spending limit</dt><dd id="left-studio">Not checked yet.</dd>
+        <dt>ElevenLabs</dt><dd id="left-elevenlabs">Not checked yet.</dd>
+        <dt>fal</dt><dd id="left-fal">Not checked yet.</dd>
+      </dl>
+      <p id="left-checked" class="muted"></p>
+      <button id="left-refresh" type="button" class="quiet">Check again</button>
+    </details>
     <noscript><p class="error">This local creator needs JavaScript. Your files have not been uploaded.</p></noscript>
   </main>
   <footer><p><a href="https://www.badmaddangerous.com">Bad, Mad &amp; Dangerous - read the essays</a></p><span>Made from the art you choose. Nothing published without you. <a href="admin.html">Administrator</a></span><span class="built-by">Website made by Zenith Advisory LLC</span></footer>

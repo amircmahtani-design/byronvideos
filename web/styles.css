@@ -175,6 +175,18 @@ select{flex:1;min-height:48px}
 .check-list dt{padding-top:4px;font-family:var(--l-caps);font-weight:500;font-size:13px;letter-spacing:.1em;text-transform:uppercase;color:var(--l-wine)}
 .check-list dd{margin:0;overflow-wrap:anywhere}
 
+/* ── what's left (owner only, closed by default) ──────────────────── */
+.remaining{margin-top:var(--s6)}
+.remaining summary{display:flex;flex-wrap:wrap;align-items:baseline;gap:var(--s1) var(--s4);min-height:44px;cursor:pointer;list-style:none}
+.remaining summary::-webkit-details-marker{display:none}
+.remaining summary::before{content:"+";width:var(--s4);font-family:var(--l-caps);font-weight:600;font-size:24px;line-height:1;color:var(--l-gold)}
+.remaining[open] summary::before{content:"2"}
+.remaining summary:focus-visible{outline:3px solid var(--l-green);outline-offset:3px}
+.remaining-title{font-family:var(--l-it);font-style:italic;font-weight:600;font-size:clamp(28px,1.3rem + .9vw,34px);line-height:1.15;color:var(--l-green)}
+.remaining-hint{font-style:italic;font-size:17px;line-height:1.4;color:var(--l-ink-3)}
+.remaining .check-list{margin:var(--s5) 0 var(--s1)}
+.remaining dd{font-size:20px;line-height:1.45;color:var(--l-ink);font-variant-numeric:tabular-nums}
+
 /* ── film status and download ─────────────────────────────────────── */
 .job{margin-top:var(--s5);scroll-margin-top:var(--s5)}
 .job>p:not(.eyebrow){font-size:20px;line-height:1.5}
