@@ -161,3 +161,29 @@ export function completedFilmNote(job) {
   return [duration ? `Duration ${duration}.` : '', advisory,
     'Download your MP4 and watch it before publishing. This prototype does not publish your film.'].filter(Boolean).join(' ');
 }
+
+// "What's left" on the studio page: the studio's own spending limit, ElevenLabs credits and the fal balance.
+// Each row stands alone; anything missing or odd reads as not available instead of a wrong number.
+const LEFT_TEXT = Object.freeze({
+  not_set_up: 'Not set up yet. A billing key is needed to show this.',
+  no_permission: 'Not available. The billing key lacks billing permission.',
+  unavailable: 'Not available right now. Try again in a moment.',
+});
+const leftCount = n => Number(n).toLocaleString('en-GB');
+const leftMoney = (amount, currency = 'USD') => amount.toLocaleString('en-GB', {style: 'currency', currency, currencyDisplay: 'narrowSymbol'});
+const leftDay = seconds => new Date(seconds * 1000).toLocaleDateString('en-GB', {day: 'numeric', month: 'short', year: 'numeric'});
+const wholeCents = n => Number.isInteger(n) && n >= 0;
+export function describeRemaining(data) {
+  const studio = data?.studio, el = data?.elevenlabs, fal = data?.fal;
+  const state = info => LEFT_TEXT[info?.state] || LEFT_TEXT.unavailable;
+  const studioText = studio?.state === 'available' && wholeCents(studio.left_cents) && wholeCents(studio.total_cents) && studio.left_cents <= studio.total_cents
+    ? `${leftMoney(studio.left_cents / 100)} left of ${leftMoney(studio.total_cents / 100)}` : LEFT_TEXT.unavailable;
+  const elText = el?.state === 'available' && [el.credits_remaining, el.credits_limit].every(wholeCents)
+    ? `${leftCount(el.credits_remaining)} credits left of ${leftCount(el.credits_limit)}`
+      + (Number.isInteger(el.resets_at) && el.resets_at > 0 ? `, renews ${leftDay(el.resets_at)}` : '') : state(el);
+  const currency = typeof fal?.currency === 'string' && /^[A-Z]{3}$/.test(fal.currency) ? fal.currency : 'USD';
+  const falText = fal?.state === 'available' && Number.isFinite(fal.balance) ? `${leftMoney(fal.balance, currency)} left` : state(fal);
+  const checked = Number.isInteger(data?.checked_at) && data.checked_at > 0
+    ? `Checked ${new Date(data.checked_at * 1000).toLocaleString('en-GB', {day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit'})}.` : '';
+  return {studio: studioText, elevenlabs: elText, fal: falText, checked};
+}

@@ -301,3 +301,24 @@ test('optional Gemini admin field stays hidden unless authenticated selected mod
     page.pagehide();assert.equal(el('gemini-key').value,'');assert.equal(el('gemini-section').hidden,true);assert.equal(el('admin-fields').disabled,true);
   }
 });
+
+test("what's left: each row stands alone and odd values read as not available", async () => {
+  const {describeRemaining}=await import('./core.mjs');
+  const today=describeRemaining({studio:{state:'available',left_cents:10000,total_cents:10000},
+    elevenlabs:{state:'available',credits_used:20058,credits_limit:121855,credits_remaining:101797,resets_at:1796011200,plan:'creator'},
+    fal:{state:'available',balance:57.48,currency:'USD'},checked_at:1795900000});
+  assert.equal(today.studio,'$100.00 left of $100.00');
+  assert.match(today.elevenlabs,/^101,797 credits left of 121,855, renews \d{1,2} \w{3} 2026$/);
+  assert.equal(today.fal,'$57.48 left');
+  assert.match(today.checked,/^Checked /);
+  const missing=describeRemaining({studio:{state:'unavailable',total_cents:10000},elevenlabs:{state:'not_set_up'},fal:{state:'no_permission'}});
+  assert.match(missing.studio,/^Not available right now/);
+  assert.match(missing.elevenlabs,/^Not set up yet/);
+  assert.match(missing.fal,/lacks billing permission/);
+  assert.equal(missing.checked,'');
+  const odd=describeRemaining({studio:{state:'available',left_cents:20000,total_cents:10000},elevenlabs:{state:'available',credits_remaining:'x'},fal:{state:'weird'}});
+  for(const row of [odd.studio,odd.elevenlabs,odd.fal]) assert.match(row,/^Not available right now/);
+  assert.deepEqual(Object.keys(describeRemaining(null)),['studio','elevenlabs','fal','checked']);
+  const html=await (await import('node:fs/promises')).readFile(new URL('./index.html',import.meta.url),'utf8');
+  assert.match(html,/<details id="remaining" class="card remaining" hidden>/); // Hidden unless the owner's live studio is connected.
+});

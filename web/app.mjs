@@ -1,10 +1,10 @@
 import {exactCheckpoint,persistExact,exactFilmAction,exactActionResolved} from './exact-film.mjs';
-import {MAX_SCRIPT_CHARACTERS, countWords, validateScript, validateImages, moveItem, safeJobId, safeDownloadURL, displayProgress, isPrivateDraft, completedFilmNote, refreshVoiceState, voiceLabel, skipNote, storyPreview, setupReminder} from './core.mjs';
+import {MAX_SCRIPT_CHARACTERS, countWords, validateScript, validateImages, moveItem, safeJobId, safeDownloadURL, displayProgress, isPrivateDraft, completedFilmNote, refreshVoiceState, voiceLabel, skipNote, storyPreview, setupReminder, describeRemaining} from './core.mjs';
 
 import {hostedCapability, freezeSubmission, submitHosted, persistPending, persistHostedJob, recoverSubmission, resumeCheckpoint, persistResume, resumeResolved, resumeHosted} from './hosted.mjs';
 
 const $ = id => document.getElementById(id);
-const ui = Object.fromEntries(['exact-actions','exact-note','approve-film','renew-preview','renew-clean','clean-download','check-exact','voice','refresh-voices','voice-status','creator','inputs','script','script-count','images','paintings','empty-images','convert','connection','reconnect','error','job','job-title','job-message','job-note','progress','download','new-film','resume','resume-film','prototype-title','prototype-copy','studio-status','retry-upload','script-skips','title-seconds','stop-film','check','check-heading','check-title','check-start','check-end','check-meta','check-go','check-edit','setup-reminder','setup-reminder-title','setup-reminder-text'].map(id => [id, $(id)]));
+const ui = Object.fromEntries(['exact-actions','exact-note','approve-film','renew-preview','renew-clean','clean-download','check-exact','voice','refresh-voices','voice-status','creator','inputs','script','script-count','images','paintings','empty-images','convert','connection','reconnect','error','job','job-title','job-message','job-note','progress','download','new-film','resume','resume-film','prototype-title','prototype-copy','studio-status','retry-upload','script-skips','title-seconds','stop-film','check','check-heading','check-title','check-start','check-end','check-meta','check-go','check-edit','setup-reminder','setup-reminder-title','setup-reminder-text','remaining','left-studio','left-elevenlabs','left-fal','left-checked','left-refresh'].map(id => [id, $(id)]));
 let paintings = [];
 let checked = false; // The owner confirmed the "check this is the right story" panel for exactly these inputs.
 let downloading = false; // A download was just started from this page.
@@ -123,6 +123,7 @@ async function checkRenderer() {
       ui['prototype-copy'].textContent = hosted.preview ? 'Generate a private watermarked draft to watch and assess as a whole. It is not approved for publication. Your originals and narrator stay fixed.' : hosted.live ? 'Your original paintings are uploaded privately in the order shown. Your narrator is fixed when you start. Nothing is published automatically.' : 'This fixture workspace tests private upload order and your chosen narrator. It does not call paid providers or generate a live film. Nothing is published.';
       ui.connection.textContent = hosted.preview ? 'Private DRAFT workspace connected. Choose your narrator and make a preview.' : hosted.live ? 'Private studio connected. Choose your narrator and make your film.' : 'Test workspace connected. Choose a narrator to test the private submission workflow.';
       ui['studio-status'].hidden = hosted.live; // The live studio shows only the steps; the box returns if anything breaks.
+      ui.remaining.hidden = !hosted.live; // Owner-only; checked when opened.
       const reminder = setupReminder(hosted.setupExpiresAt);
       ui['setup-reminder'].hidden = !reminder;
       if (reminder) {
@@ -145,7 +146,7 @@ async function checkRenderer() {
       ui.connection.textContent = 'Sign in with your permitted Google account to open the private creator.';
       ui.reconnect.textContent = 'Sign in';
     }
-  } finally { if (!hosted?.live) ui['studio-status'].hidden = false; checking = false; ui.reconnect.disabled = false; updateConvert(); }
+  } finally { if (!hosted?.live) { ui['studio-status'].hidden = false; ui.remaining.hidden = true; } checking = false; ui.reconnect.disabled = false; updateConvert(); }
 }
 function stopPolling() { clearTimeout(timer); timer = null; pollController?.abort(); pollController = null; }
 function saveActiveJob(id) { try { if (id) { sessionStorage.setItem('byron-active-job', id); sessionStorage.setItem('byron-active-job-mode', hostedJob ? 'hosted' : 'local'); } else { sessionStorage.removeItem('byron-active-job'); sessionStorage.removeItem('byron-active-job-mode'); } } catch { /* Private browsing may disable storage. */ } }
@@ -467,6 +468,23 @@ async function freshHosted() {
   hosted = capability;
   return capability;
 }
+// What's left: read only when the owner opens the section (or presses Check again). Nothing is spent.
+let leftLoading = false, leftLoaded = false;
+async function loadRemaining() {
+  if (leftLoading || !hosted?.live) return;
+  leftLoading = true; ui['left-refresh'].disabled = true; ui['left-checked'].textContent = 'Checking…';
+  try {
+    const capability = await freshHosted();
+    const response = await timedFetch('/api/studio/remaining', {cache:'no-store', credentials:'same-origin', headers:{'X-CSRF-Token':capability.csrf}}, 30000);
+    if (!response.ok) throw new Error();
+    const text = describeRemaining(await response.json());
+    ui['left-studio'].textContent = text.studio; ui['left-elevenlabs'].textContent = text.elevenlabs; ui['left-fal'].textContent = text.fal;
+    ui['left-checked'].textContent = text.checked; leftLoaded = true;
+  } catch { ui['left-checked'].textContent = 'Could not check just now. Press Check again in a moment; nothing was changed.'; }
+  finally { leftLoading = false; ui['left-refresh'].disabled = false; }
+}
+ui.remaining.addEventListener('toggle', () => { if (ui.remaining.open && !leftLoaded) loadRemaining(); });
+ui['left-refresh'].addEventListener('click', loadRemaining);
 ui.creator.addEventListener('submit', async event => {
   event.preventDefault(); if (!ready || busy) return;
   const error = validateScript(ui.script.value) || validateImages(paintings.map(item => item.file));
