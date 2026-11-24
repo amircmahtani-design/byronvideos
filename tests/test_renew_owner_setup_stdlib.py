@@ -70,6 +70,29 @@ class RenewOwnerSetupChecks(unittest.TestCase):
         self.assertEqual((new['approved_total_cap_cents'], new['prior_spend_cents']), (dollars * 100, 0))
         self.assertNotEqual(new['scope'], old['scope'])
 
+    def test_new_build_software_list_is_pinned_and_the_release_check_then_passes(self):
+        # Live, 24 Nov 2026: a fresh build's sdk-lock no longer matched the settings and the website refused to start.
+        lock = self.root / 'sdk-lock.json'
+        lock.write_text(json.dumps({'packages': {'fastapi': '0.162.0'}, 'python': '3.12'}, sort_keys=True) + '\n')
+        out = self.root / 'pinned.json'
+        self.assertEqual(renew.main(['--bundle', str(self.bundle), '--private-key', str(self.write_key(self.private)),
+                                     '--out', str(out), '--sdk-lock', str(lock)]), 0)
+        text = out.read_text(encoding='utf-8')
+        config = parse_bootstrap_bundle(text, self.key_sha, administration_only=True)['config']
+        self.assertEqual(config['runtime']['sdk_lock_sha256'], hashlib.sha256(lock.read_bytes()).hexdigest())
+        old = json.loads(self.bundle.read_text(encoding='utf-8'))['config']
+        self.assertEqual({k: v for k, v in config.items() if k != 'runtime'}, {k: v for k, v in old.items() if k != 'runtime'})
+        spec = importlib.util.spec_from_file_location('check_release', SCRIPT.parent / 'check_release.py')
+        check = importlib.util.module_from_spec(spec); spec.loader.exec_module(check)
+        lines = check.check(text, self.root, self.key_sha)
+        self.assertTrue(any(ok and 'Software list' in m for ok, m in lines))
+        stale = check.check(self.bundle.read_text(encoding='utf-8'), self.root, self.key_sha)
+        self.assertFalse(all(ok for ok, _ in stale))  # The unpinned settings are reported, not deployed.
+        bad = self.root / 'not-a-lock.json'; bad.write_text('{"x": 1}')
+        with self.assertRaises(SystemExit):
+            renew.main(['--bundle', str(self.bundle), '--private-key', str(self.write_key(self.private, 'k2.pem')),
+                        '--out', str(self.root / 'bad.json'), '--sdk-lock', str(bad)])
+
     def test_lost_key_is_replaced_by_a_new_one_that_the_studio_accepts_under_its_new_pin(self):
         key_file, out = self.root / 'keys' / 'new-owner.pem', self.root / 'renewed.json'
         self.assertEqual(renew.main(['--bundle', str(self.bundle), '--private-key', str(key_file), '--out', str(out), '--create-key']), 0)

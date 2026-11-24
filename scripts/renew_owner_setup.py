@@ -20,6 +20,9 @@ highest value the studio accepts ($10,000,000, in effect no limit) under a NEW s
 from zero, so the old record (which held the old cap) is left alone and no "Budget record needs review"
 error can follow. The per-film and per-step limits are kept: they stop one runaway film, nothing more.
 ElevenLabs and fal still stop at your own account balances.
+
+After a new build, if scripts/check_release.py says the software list differs, add --sdk-lock with that
+build's sdk-lock.json to pin it. The whole release order is in hosted/RELEASING.md.
 """
 import argparse
 import base64
@@ -65,6 +68,9 @@ def main(argv=None):
                         help="Lift the studio's total spending limit (keeps the per-film limit).")
     parser.add_argument('--spending-limit', type=int, metavar='DOLLARS',
                         help='Set a new total spending limit in whole dollars, counted from zero from now on (e.g. 100).')
+    parser.add_argument('--sdk-lock', type=Path, metavar='SDK_LOCK_JSON',
+                        help="A new build's sdk-lock.json (from its GitHub 'public-runtime-candidate-review' artifact): "
+                             'pin that build\'s software list so the studio accepts it. See hosted/RELEASING.md.')
     args = parser.parse_args(argv)
     if not 1 <= args.days <= SETUP_MAX_SECONDS // 86400:
         raise SystemExit(f'--days must be between 1 and {SETUP_MAX_SECONDS // 86400}.')
@@ -97,6 +103,13 @@ def main(argv=None):
         budget['approved_total_cap_cents'] = cap
         budget['prior_spend_cents'] = 0
         bundle['config'] = {**bundle['config'], 'budget': budget}
+    if args.sdk_lock is not None:
+        lock_bytes = args.sdk_lock.read_bytes()
+        lock = json.loads(lock_bytes)
+        if not (isinstance(lock, dict) and set(lock) == {'python', 'packages'} and isinstance(lock['packages'], dict) and lock['packages']):
+            raise SystemExit('That is not a build sdk-lock.json (expected "python" and "packages"); nothing was written.')
+        bundle['config'] = {**bundle['config'], 'runtime': {**bundle['config']['runtime'],
+                                                           'sdk_lock_sha256': hashlib.sha256(lock_bytes).hexdigest()}}
     now = int(time.time())
     payload = {**bundle['acceptance']['payload'], 'schema_version': 1, 'purpose': PURPOSE,
                'config_sha256': digest(bundle['config']), 'plan_sha256': digest(bundle['processing_plan']),
@@ -111,6 +124,8 @@ def main(argv=None):
     parse_bootstrap_bundle(text, hashlib.sha256(public).hexdigest(), administration_only=True)  # Exactly what the studio checks.
     args.out.write_text(text, encoding='utf-8')
     print(f'Renewed owner setup written to {args.out}; valid until {utc(payload["expires_at"])}.')
+    if args.sdk_lock is not None:
+        print(f"Pinned the new build's software list: sdk_lock_sha256 = {renewed['config']['runtime']['sdk_lock_sha256']}.")
     if args.spending_limit is not None:
         print(f'The total spending limit is now ${args.spending_limit}, counted from zero. The per-film limit is unchanged.')
     if args.remove_spending_limit:
