@@ -63,6 +63,8 @@ def main(argv=None):
     parser.add_argument('--create-key', action='store_true', help='Owner key lost: make a new one at --private-key (must not exist).')
     parser.add_argument('--remove-spending-limit', action='store_true',
                         help="Lift the studio's total spending limit (keeps the per-film limit).")
+    parser.add_argument('--spending-limit', type=int, metavar='DOLLARS',
+                        help='Set a new total spending limit in whole dollars, counted from zero from now on (e.g. 100).')
     args = parser.parse_args(argv)
     if not 1 <= args.days <= SETUP_MAX_SECONDS // 86400:
         raise SystemExit(f'--days must be between 1 and {SETUP_MAX_SECONDS // 86400}.')
@@ -83,11 +85,16 @@ def main(argv=None):
     public = key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
     if base64.b64encode(public).decode() != bundle.get('reviewer_public_key_base64'):
         raise SystemExit("This private key does not belong to the studio's pinned owner key; nothing was signed.")
-    if args.remove_spending_limit:
+    if args.remove_spending_limit and args.spending_limit is not None:
+        raise SystemExit('Choose either --remove-spending-limit or --spending-limit, not both.')
+    if args.remove_spending_limit or args.spending_limit is not None:
         budget = dict(bundle['config']['budget'])
-        stamp = time.strftime('%Y%m%d', time.gmtime())
-        budget['scope'] = (budget['scope'][:100] + '-nolimit-' + stamp)[:128]
-        budget['approved_total_cap_cents'] = UNLIMITED_CENTS
+        cap = UNLIMITED_CENTS if args.remove_spending_limit else args.spending_limit * 100
+        if not budget['job_cap_cents'] <= cap <= UNLIMITED_CENTS:
+            raise SystemExit(f"The limit must be at least one film's limit (${budget['job_cap_cents'] // 100}); nothing was written.")
+        stamp = time.strftime('%Y%m%d%H%M', time.gmtime())
+        budget['scope'] = (budget['scope'][:100] + '-cap' + str(cap // 100) + '-' + stamp)[:128]
+        budget['approved_total_cap_cents'] = cap
         budget['prior_spend_cents'] = 0
         bundle['config'] = {**bundle['config'], 'budget': budget}
     now = int(time.time())
@@ -104,6 +111,8 @@ def main(argv=None):
     parse_bootstrap_bundle(text, hashlib.sha256(public).hexdigest(), administration_only=True)  # Exactly what the studio checks.
     args.out.write_text(text, encoding='utf-8')
     print(f'Renewed owner setup written to {args.out}; valid until {utc(payload["expires_at"])}.')
+    if args.spending_limit is not None:
+        print(f'The total spending limit is now ${args.spending_limit}, counted from zero. The per-film limit is unchanged.')
     if args.remove_spending_limit:
         print('The total spending limit is removed. The per-film limit is unchanged; ElevenLabs and fal still stop at your balances.')
     if args.create_key:
