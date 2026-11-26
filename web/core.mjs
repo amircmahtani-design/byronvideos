@@ -41,10 +41,17 @@ function linkOnly(line) {
   const label = trimmed.split(/\s+/u).filter(Boolean).length <= 4 && rest.trimEnd().endsWith(':');
   return [count, count > 0 && (!/\p{L}/u.test(trimmed) || label)];
 }
-function isHeading(line, following) {
-  line = line.trim();
-  if (line.startsWith('#') || (/^(?:written\s+|words\s+)?by\s+\S/iu.test(line) && line.split(/\s+/u).length <= 8)) return true;
-  return line.split(/\s+/u).length <= 15 && !/[.!?…:;,"'”’)]$/u.test(line) && !following.trim();
+const unemphasise = line => line.trim().replace(/^[*_~]+|[*_~]+$/gu, '').trim();
+function isByline(line) {
+  line = unemphasise(line);
+  return /^(?:written\s+|words\s+)?by\s+\S/iu.test(line) && line.split(/\s+/u).length <= 8;
+}
+function isHeading(line, following, first = false) {
+  line = unemphasise(line);
+  if (line.startsWith('#') || isByline(line)) return true;
+  const after = unemphasise(following);
+  return line.split(/\s+/u).length <= 15 && !/[.!?…:;,"'”’)]$/u.test(line)
+    && (!after || isByline(after) || (first && /^[^\p{L}]*\p{Lu}/u.test(after)));
 }
 export function storySkips(script) {
   const lines = script.replace(MARKDOWN_LINK, '$1').replace(/\r\n?/gu, '\n').split('\n');
@@ -54,8 +61,8 @@ export function storySkips(script) {
     if (!lines[i].trim()) continue;
     seen++;
     if (linkOnly(lines[i])[1]) continue;
-    if (!isHeading(lines[i], lines[i + 1] || '')) break;
-    heading.push(lines[i].trim().replace(/^#+/u, '').trim()); lines[i] = '';
+    if (!isHeading(lines[i], lines[i + 1] || '', !heading.length)) break;
+    heading.push(unemphasise(lines[i].trim().replace(/^#+/u, ''))); lines[i] = '';
   }
   let links = 0;
   for (const line of lines) {
@@ -85,7 +92,7 @@ export function storyPreview(script, edge = 14) {
   let removed = 0;
   const story = lines.filter(line => {
     if (!line.trim()) return true;
-    if (removed < heading.length && line.trim().replace(/^#+/u, '').trim() === heading[removed]) { removed++; return false; }
+    if (removed < heading.length && unemphasise(line.trim().replace(/^#+/u, '')) === heading[removed]) { removed++; return false; }
     return !linkOnly(line)[1];
   }).join(' ').replace(WEB_ADDRESS, '').split(/\s+/u).filter(Boolean);
   const start = story.slice(0, edge).join(' ') + (story.length > edge ? ' …' : '');

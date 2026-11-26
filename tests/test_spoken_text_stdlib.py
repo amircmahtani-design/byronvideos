@@ -35,6 +35,29 @@ class SpokenTextChecks(unittest.TestCase):
         self.assertEqual(skipped, {'heading': [], 'links': 0})
         self.assertEqual(prepare_story('One short opening line\nstill the story.')[1]['heading'], [])  # No blank line after.
 
+    def test_title_directly_above_its_byline_is_the_title(self):
+        # Pasted from an email: no blank line between the title and "by Lord Byron".
+        text, skipped = prepare_story('A Grief of Her Own\nby Lord Byron\n\nSignora Teresa wept.\n\nThere was never a card.')
+        self.assertEqual(skipped['heading'], ['A Grief of Her Own', 'by Lord Byron'])
+        self.assertTrue(text.startswith('Signora Teresa wept.'))
+
+    def test_bold_title_from_email_loses_its_asterisks(self):
+        text, skipped = prepare_story('*A Grief of Her Own*\n*by Lord Byron*\n\nSignora Teresa wept.')
+        self.assertEqual(skipped['heading'], ['A Grief of Her Own', 'by Lord Byron'])
+        self.assertEqual(text, 'Signora Teresa wept.')
+
+    def test_title_with_the_story_straight_beneath_it(self):
+        text, skipped = prepare_story('A Grief of Her Own\nSignora Teresa wept.\n\nThere was never a card.')
+        self.assertEqual(skipped['heading'], ['A Grief of Her Own'])
+        self.assertTrue(text.startswith('Signora Teresa wept.'))
+        self.assertEqual(prepare_story('The weight of wings\n“Come,” she said.')[1]['heading'], ['The weight of wings'])
+
+    def test_a_wrapped_first_line_is_story_not_title(self):
+        # Plain-text email wraps long lines; the next line carries on in lower case.
+        text, skipped = prepare_story('Signora Teresa Esposito had attended nearly two thousand funerals in Naples\nand had been sorry at eleven.')
+        self.assertEqual(skipped['heading'], [])
+        self.assertTrue(text.startswith('Signora Teresa Esposito'))
+
     def test_nothing_left_is_refused(self):
         with self.assertRaises(ValueError): prepare_story('Just A Title\n\nhttps://example.com')
 
