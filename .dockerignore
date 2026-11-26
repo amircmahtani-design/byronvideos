@@ -1,0 +1,27 @@
+# Allowlist build context: never transmit private inputs, evidence, archives or Git.
+**
+!Dockerfile.worker
+!Dockerfile.service
+!web/
+!web/*.html
+!web/*.css
+!web/*.mjs
+!web/robots.txt
+!web/favicon.svg
+!web/sitemap.xml
+web/*.test.mjs
+!.dockerignore
+!byron_video/
+!byron_video/*.py
+!style-guide/
+!style-guide/**
+**/__pycache__/
+**/*.pyc
+**/.private/
+**/.env
+**/.env.*
+**/*.zip
+**/*.mp4
+**/*.wav
+**/*.sqlite*
+**/.git/
