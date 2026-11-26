@@ -235,6 +235,9 @@ test('heading lines and link-only lines are listed as not read aloud, matching s
   assert.deepEqual(storySkips('She ordered the frame from Amazon.com and waited.'),{heading:[],links:0});
   assert.deepEqual(storySkips('A Grief of Her Own\nby Lord Byron\n\nSignora Teresa wept.').heading,['A Grief of Her Own','by Lord Byron']);
   assert.deepEqual(storySkips('*A Grief of Her Own*\n\nSignora Teresa wept.').heading,['A Grief of Her Own']);
+  assert.deepEqual(storySkips('A Grief of Her Own\nSignora Teresa wept.').heading,['A Grief of Her Own']);
+  assert.deepEqual(storySkips('The weight of wings\n“Come,” she said.').heading,['The weight of wings']);
+  assert.deepEqual(storySkips('Signora Teresa Esposito had attended nearly two thousand funerals in Naples\nand had been sorry.').heading,[]);
   assert.equal(storyPreview('*A Grief of Her Own*\n*by Lord Byron*\n\nSignora Teresa wept.').start,'Signora Teresa wept.');
   assert.equal(skipNote('They sat down slowly.\nThe park was quiet.'),'');
 });

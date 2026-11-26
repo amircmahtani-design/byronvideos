@@ -3,7 +3,10 @@
   - heading: at the top, before the story begins, the title and byline lines are set aside:
     a line starting with '#', a "by …" / "written by …" line, or a short line (at most 15
     words) with no sentence-ending punctuation that is followed by a blank line or directly
-    by a byline ("A Grief of Her Own" with "by Lord Byron" on the next line). Emphasis marks
+    by a byline ("A Grief of Her Own" with "by Lord Byron" on the next line). The very first
+    line is also the title when the story starts straight beneath it with a new sentence (a
+    capital letter or an opening quote); a next line starting in lower case means the first
+    line is just a wrapped line of the story. Emphasis marks
     that email leaves around a bold title (*Title*, _Title_) are dropped from the heading;
   - links: Markdown links keep their visible label; http(s)/www addresses are removed anywhere;
     a line that is only web addresses (including plain ones such as badmaddangerous.com),
@@ -40,12 +43,21 @@ def is_byline(line):
     return bool(BYLINE.match(line)) and len(line.split()) <= 8
 
 
-def is_heading(line, following):
+
+
+def starts_sentence(line):
+    """True when the line's first letter is a capital (quotes and dashes before it are fine)."""
+    letter = next((c for c in line if c.isalpha()), '')
+    return letter.isupper()
+
+
+def is_heading(line, following, first=False):
     line = EMPHASIS.sub('', line.strip()).strip()
     if line.startswith('#') or is_byline(line):
         return True
+    after = EMPHASIS.sub('', following.strip()).strip()
     return (len(line.split()) <= 15 and not SENTENCE_END.search(line)
-            and (not following.strip() or is_byline(following)))
+            and (not after or is_byline(after) or (first and starts_sentence(after))))
 
 
 def prepare_story(script):
@@ -61,7 +73,7 @@ def prepare_story(script):
         seen += 1
         if link_only(line)[1]:
             continue  # A link-only line; removed with the other links below.
-        if not is_heading(line, lines[index + 1] if index + 1 < len(lines) else ''):
+        if not is_heading(line, lines[index + 1] if index + 1 < len(lines) else '', first=not skipped['heading']):
             break  # The story has begun.
         skipped['heading'].append(EMPHASIS.sub('', line.strip().lstrip('#').strip()).strip())
         lines[index] = ''

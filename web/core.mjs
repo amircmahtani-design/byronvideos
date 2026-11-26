@@ -46,10 +46,12 @@ function isByline(line) {
   line = unemphasise(line);
   return /^(?:written\s+|words\s+)?by\s+\S/iu.test(line) && line.split(/\s+/u).length <= 8;
 }
-function isHeading(line, following) {
+function isHeading(line, following, first = false) {
   line = unemphasise(line);
   if (line.startsWith('#') || isByline(line)) return true;
-  return line.split(/\s+/u).length <= 15 && !/[.!?…:;,"'”’)]$/u.test(line) && (!following.trim() || isByline(following));
+  const after = unemphasise(following);
+  return line.split(/\s+/u).length <= 15 && !/[.!?…:;,"'”’)]$/u.test(line)
+    && (!after || isByline(after) || (first && /^[^\p{L}]*\p{Lu}/u.test(after)));
 }
 export function storySkips(script) {
   const lines = script.replace(MARKDOWN_LINK, '$1').replace(/\r\n?/gu, '\n').split('\n');
@@ -59,7 +61,7 @@ export function storySkips(script) {
     if (!lines[i].trim()) continue;
     seen++;
     if (linkOnly(lines[i])[1]) continue;
-    if (!isHeading(lines[i], lines[i + 1] || '')) break;
+    if (!isHeading(lines[i], lines[i + 1] || '', !heading.length)) break;
     heading.push(unemphasise(lines[i].trim().replace(/^#+/u, ''))); lines[i] = '';
   }
   let links = 0;
