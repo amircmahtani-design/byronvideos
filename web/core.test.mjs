@@ -233,6 +233,9 @@ test('heading lines and link-only lines are listed as not read aloud, matching s
   assert.deepEqual(storySkips(live),{heading:['The Woman Who Waited','by Lord Byron'],links:1});
   assert.equal(skipNote(live),'Not read aloud or subtitled: the heading “The Woman Who Waited”, “by Lord Byron” and one web link.');
   assert.deepEqual(storySkips('She ordered the frame from Amazon.com and waited.'),{heading:[],links:0});
+  assert.deepEqual(storySkips('A Grief of Her Own\nby Lord Byron\n\nSignora Teresa wept.').heading,['A Grief of Her Own','by Lord Byron']);
+  assert.deepEqual(storySkips('*A Grief of Her Own*\n\nSignora Teresa wept.').heading,['A Grief of Her Own']);
+  assert.equal(storyPreview('*A Grief of Her Own*\n*by Lord Byron*\n\nSignora Teresa wept.').start,'Signora Teresa wept.');
   assert.equal(skipNote('They sat down slowly.\nThe park was quiet.'),'');
 });
 test('private draft requires exact state, kind and flag; never inferred from generic completion', () => {

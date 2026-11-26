@@ -2,7 +2,9 @@
 
   - heading: at the top, before the story begins, the title and byline lines are set aside:
     a line starting with '#', a "by …" / "written by …" line, or a short line (at most 15
-    words) with no sentence-ending punctuation that is followed by a blank line;
+    words) with no sentence-ending punctuation that is followed by a blank line or directly
+    by a byline ("A Grief of Her Own" with "by Lord Byron" on the next line). Emphasis marks
+    that email leaves around a bold title (*Title*, _Title_) are dropped from the heading;
   - links: Markdown links keep their visible label; http(s)/www addresses are removed anywhere;
     a line that is only web addresses (including plain ones such as badmaddangerous.com),
     optionally with a short label such as "Read more:", is dropped. A plain domain name
@@ -30,11 +32,20 @@ BYLINE = re.compile(r'(?:written\s+|words\s+)?by\s+\S', re.I)
 HEADING_LINES = 4
 
 
+EMPHASIS = re.compile(r'^[*_~]+|[*_~]+$')
+
+
+def is_byline(line):
+    line = EMPHASIS.sub('', line.strip()).strip()
+    return bool(BYLINE.match(line)) and len(line.split()) <= 8
+
+
 def is_heading(line, following):
-    line = line.strip()
-    if line.startswith('#') or (BYLINE.match(line) and len(line.split()) <= 8):
+    line = EMPHASIS.sub('', line.strip()).strip()
+    if line.startswith('#') or is_byline(line):
         return True
-    return len(line.split()) <= 15 and not SENTENCE_END.search(line) and not following.strip()
+    return (len(line.split()) <= 15 and not SENTENCE_END.search(line)
+            and (not following.strip() or is_byline(following)))
 
 
 def prepare_story(script):
@@ -52,7 +63,7 @@ def prepare_story(script):
             continue  # A link-only line; removed with the other links below.
         if not is_heading(line, lines[index + 1] if index + 1 < len(lines) else ''):
             break  # The story has begun.
-        skipped['heading'].append(line.strip().lstrip('#').strip())
+        skipped['heading'].append(EMPHASIS.sub('', line.strip().lstrip('#').strip()).strip())
         lines[index] = ''
     out, separator = [], None
     for line in lines:

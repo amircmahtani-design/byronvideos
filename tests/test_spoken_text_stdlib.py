@@ -35,6 +35,17 @@ class SpokenTextChecks(unittest.TestCase):
         self.assertEqual(skipped, {'heading': [], 'links': 0})
         self.assertEqual(prepare_story('One short opening line\nstill the story.')[1]['heading'], [])  # No blank line after.
 
+    def test_title_directly_above_its_byline_is_the_title(self):
+        # Pasted from an email: no blank line between the title and "by Lord Byron".
+        text, skipped = prepare_story('A Grief of Her Own\nby Lord Byron\n\nSignora Teresa wept.\n\nThere was never a card.')
+        self.assertEqual(skipped['heading'], ['A Grief of Her Own', 'by Lord Byron'])
+        self.assertTrue(text.startswith('Signora Teresa wept.'))
+
+    def test_bold_title_from_email_loses_its_asterisks(self):
+        text, skipped = prepare_story('*A Grief of Her Own*\n*by Lord Byron*\n\nSignora Teresa wept.')
+        self.assertEqual(skipped['heading'], ['A Grief of Her Own', 'by Lord Byron'])
+        self.assertEqual(text, 'Signora Teresa wept.')
+
     def test_nothing_left_is_refused(self):
         with self.assertRaises(ValueError): prepare_story('Just A Title\n\nhttps://example.com')
 
